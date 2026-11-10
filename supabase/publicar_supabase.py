@@ -181,6 +181,9 @@ def baixar_config():
     linhas = req("GET", "/rest/v1/gerencias?select=gc,nome_gerente,genero")
     G = {r["gc"]: r["nome_gerente"] or "" for r in linhas}
     GEN = {r["gc"]: r["genero"] for r in linhas if r.get("genero") in ("M", "F")}
+    if not any(G.values()):   # primeira carga: nomes guardados na configuração (o repositório público não leva nomes)
+        G = C.get("nomes_gerentes") or G
+        GEN = {**(C.get("generos_gc") or {}), **GEN}
     if C.get("genero_empresa") in ("M", "F"): GEN["EMPRESA"] = C["genero_empresa"]
     for nome, v in (("pesos.json", C.get("pesos")), ("supervisores.json", C.get("supervisores")), ("gerencias.json", G or None), ("generos.json", GEN or None)):
         if v:
