@@ -9,6 +9,7 @@
     status <estado> [mensagem]  → grava no portal o andamento (aguardando, rodando, ok, erro)
     montar-sovi-bruto   → junta as partes do SOVI bruto enviadas pelo portal (BASES/SOVI_BRUTO) em dados/bases/SOVI_BRUTO
     limpar-sovi-bruto   → apaga do Supabase as partes do SOVI bruto que já viraram SOVI resumido
+    avisar              → e-mail aos gerentes quando um mês novo é publicado (GMAIL_USER / GMAIL_APP_PASSWORD)
 
 Variáveis de ambiente (só na máquina de processamento – NUNCA no HTML):
     SUPABASE_URL           ex.: https://xxxx.supabase.co
@@ -240,7 +241,7 @@ def cfg(chave, padrao=None):
 
 
 def precisa():
-    pend = [k for k in ("carga_pendente", "pendente", "processar_agora") if cfg(k, False) is True]
+    pend = [k for k in ("carga_pendente", "pendente", "processar_agora", "aviso_email_forcar") if cfg(k, False) is True]
     print("pendente:", ", ".join(pend) if pend else "nada")
     return bool(pend)
 
@@ -291,6 +292,80 @@ def limpar_sovi_bruto():
     print(f"{len(apagar)} parte(s) do SOVI bruto apagada(s) do Supabase.")
 
 
+# ---------------------------------------------------------------- aviso por e-mail aos gerentes
+def _dt_br(v):
+    try:
+        import datetime as dt
+        d = dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        if d.tzinfo: d = d.astimezone(dt.timezone(dt.timedelta(hours=-3)))
+        return d.strftime("%d/%m às %H:%M")
+    except Exception:
+        return str(v)
+
+
+def _corpo(nome, gcs, ref, link, prazo):
+    import html
+    m = int(ref[5:7]); rot = f"{MESES[m].capitalize()}/{ref[2:4]}"
+    lista = ", ".join(gcs)
+    pz = (f'<p style="margin:0 0 14px">Envie a versão final pelo portal até <b>{html.escape(prazo)}</b>.</p>' if prazo else "")
+    h = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+<div style="background:#c8102e;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;font-size:18px;font-weight:600">Portal Execução</div>
+<div style="border:1px solid #e5e7eb;border-top:0;padding:22px;border-radius:0 0 10px 10px">
+<p style="margin:0 0 14px">Olá, {html.escape(nome.split()[0].title() if nome else "")}!</p>
+<p style="margin:0 0 14px">A apresentação de <b>{rot}</b> de <b>{html.escape(lista)}</b> já está pronta no Portal Execução, com os indicadores atualizados (RED, ICE, SOVI, pontuação e ranking).</p>
+{pz}<p style="margin:22px 0"><a href="{link}" style="background:#c8102e;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">Abrir o portal</a></p>
+<p style="margin:0;color:#6b7280;font-size:13px">Entre com o seu e-mail e senha. Este é um aviso automático: não precisa responder.</p></div></div>"""
+    txt = (f"Olá!\n\nA apresentação de {rot} de {lista} já está pronta no Portal Execução.\n"
+           + (f"Envie a versão final pelo portal até {prazo}.\n" if prazo else "") + f"\nAcesse: {link}\n")
+    return f"Portal Execução · apresentação de {rot} pronta", txt, h
+
+
+def avisar():
+    usuario, senha = os.environ.get("GMAIL_USER", "").strip(), re.sub(r"\s+", "", os.environ.get("GMAIL_APP_PASSWORD", ""))
+    desliga = lambda: upsert("config", [{"chave": "aviso_email_forcar", "valor": False}], "chave")   # nunca deixa o robô em laço
+    if not usuario or not senha:
+        desliga(); print("Aviso por e-mail: segredos GMAIL_USER / GMAIL_APP_PASSWORD não cadastrados no GitHub. Nada enviado."); return 0
+    if cfg("aviso_email_ativo", True) is False:
+        desliga(); print("Aviso por e-mail desligado no Painel (Configurações)."); return 0
+    meta = req("GET", "/rest/v1/portal_meta?select=payload&id=eq.1") or []
+    if not meta: print("Nada publicado ainda."); return 0
+    ref = meta[0]["payload"]["meses"][-1]
+    forcar = cfg("aviso_email_forcar", False) is True
+    if cfg("aviso_email_ref") == ref and not forcar:
+        print(f"Os gerentes já foram avisados de {ref}."); return 0
+    perfis = req("GET", "/rest/v1/perfis?select=id,nome,email,perfil,ativo,pode_ver&ativo=eq.true&pode_ver=eq.true&perfil=eq.usuario") or []
+    vinc = req("GET", "/rest/v1/usuario_gc?select=usuario_id,gc") or []
+    gcs = {}
+    for v in vinc: gcs.setdefault(v["usuario_id"], []).append(v["gc"])
+    dest = [(p["nome"], p["email"], sorted(gcs[p["id"]])) for p in perfis if gcs.get(p["id"]) and p.get("email")]
+    if not dest:
+        desliga(); print("Nenhum gerente com e-mail e gerência cadastrados no portal. Nada enviado."); return 0
+    P = cfg("prazo_envio") or {}
+    fecha = P.get("fecha")
+    prazo = _dt_br(fecha) if fecha and fecha > time.strftime("%Y-%m-%dT%H:%M") else ""
+    link = os.environ.get("PORTAL_URL", "").strip() or "https://execucaoband.github.io/portal-execucao/"
+    import smtplib, ssl
+    from email.message import EmailMessage
+    from email.utils import formataddr
+    ok, falhas = [], []
+    try:
+        smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context(), timeout=60); smtp.login(usuario, senha)
+    except Exception as e:
+        desliga(); upsert("config", [{"chave": "aviso_email_log", "valor": {"ref": ref, "quando": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "enviados": 0, "falhas": [f"login no Gmail recusado: {e}"]}}], "chave")
+        raise SystemExit(f"Gmail recusou o login ({e}). Confira o GMAIL_USER e a senha de app no GitHub.")
+    with smtp:
+        for nome, email, g in dest:
+            assunto, txt, h = _corpo(nome, g, ref, link, prazo)
+            m = EmailMessage(); m["Subject"] = assunto; m["From"] = formataddr(("Portal Execução", usuario)); m["To"] = email
+            m.set_content(txt); m.add_alternative(h, subtype="html")
+            try: smtp.send_message(m); ok.append(email)
+            except Exception as e: falhas.append(f"{email}: {e}")
+    upsert("config", [{"chave": "aviso_email_ref", "valor": ref}, {"chave": "aviso_email_forcar", "valor": False},
+                      {"chave": "aviso_email_log", "valor": {"ref": ref, "quando": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "enviados": len(ok), "falhas": falhas[:20]}}], "chave")
+    print(f"Aviso de {ref}: {len(ok)} e-mail(s) enviado(s)" + (f", {len(falhas)} falha(s): {falhas}" if falhas else "."))
+    return len(ok)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "baixar-config": baixar_config()
@@ -302,4 +377,5 @@ if __name__ == "__main__":
     elif cmd == "status": gravar_status(sys.argv[2], " ".join(sys.argv[3:]))
     elif cmd == "montar-sovi-bruto": print(f"{montar_sovi_bruto()} SOVI bruto(s) montado(s).")
     elif cmd == "limpar-sovi-bruto": limpar_sovi_bruto()
+    elif cmd == "avisar": avisar()
     else: print(__doc__)
