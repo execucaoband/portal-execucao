@@ -1,0 +1,116 @@
+# Processamento na nuvem: o administrador só sobe as planilhas na aba Cargas do portal.
+# A cada 10 minutos este robô confere no Supabase se chegou carga nova (ou alteração no Painel / "Processar agora").
+# Se chegou: baixa as planilhas, calcula, gera as apresentações e publica no portal. Ninguém precisa rodar nada no PC.
+# Segredo necessário (Settings → Secrets and variables → Actions): SUPABASE_SERVICE_KEY (chave service_role).
+name: Processar portal
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # confere se há carga nova
+    - cron: "17 9 * * *"     # 1x por dia: mantém o robô ativo (o GitHub desliga agendamentos após 60 dias sem commits)
+  workflow_dispatch:
+    inputs:
+      forcar:
+        description: "Processar mesmo sem carga nova"
+        type: boolean
+        default: true
+
+concurrency:
+  group: processar-portal
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ANO: "2026"
+  PYTHONUTF8: "1"
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rodar: ${{ steps.v.outputs.rodar }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Manter o agendamento ativo
+        if: github.event.schedule == '17 9 * * *'
+        run: |
+          ultimo=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - ultimo )) -gt $(( 45 * 86400 )) ]; then
+            git config user.name "robo-portal"; git config user.email "robo-portal@users.noreply.github.com"
+            git commit --allow-empty -m "robô: mantém o processamento automático ativo" && git push
+          fi
+      - name: Tem carga nova no portal?
+        id: v
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          export SUPABASE_URL=$(grep -oE 'https://[a-z0-9]+\.supabase\.co' config.js | head -1)
+          if [ -z "$SUPABASE_SERVICE_KEY" ]; then echo "::error::Cadastre o segredo SUPABASE_SERVICE_KEY em Settings > Secrets and variables > Actions"; exit 1; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.forcar }}" = "true" ]; then echo "rodar=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if python supabase/publicar_supabase.py precisa; then echo "rodar=1" >> "$GITHUB_OUTPUT"; else echo "rodar=0" >> "$GITHUB_OUTPUT"; fi
+
+  processar:
+    needs: verificar
+    if: needs.verificar.outputs.rodar == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      DADOS_DIR: ${{ github.workspace }}/dados/bases
+      PPT_RENDER: libreoffice
+    steps:
+      - uses: actions/checkout@v4
+      - name: Endereço do Supabase (do config.js)
+        run: echo "SUPABASE_URL=$(grep -oE 'https://[a-z0-9]+\.supabase\.co' config.js | head -1)" >> "$GITHUB_ENV"
+      - name: Avisa o portal que começou
+        run: python supabase/publicar_supabase.py status rodando "Processando as planilhas na nuvem"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dependências (Python, Node, LibreOffice e fontes)
+        run: |
+          pip install -r requirements.txt
+          (cd gerador && npm install --no-audit --no-fund)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libreoffice-impress fonts-open-sans fonts-liberation2 >/dev/null
+          # Selawik = fonte aberta da Microsoft com as mesmas medidas do Segoe UI (usado nas apresentações)
+          mkdir -p ~/.local/share/fonts ~/.config/fontconfig
+          if curl -fsSL -o /tmp/selawik.zip https://github.com/microsoft/Selawik/releases/download/1.01/Selawik_Release.zip; then
+            unzip -qo /tmp/selawik.zip -d ~/.local/share/fonts/selawik || true
+          fi
+          cat > ~/.config/fontconfig/fonts.conf <<'XML'
+          <?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <alias><family>Segoe UI</family><prefer><family>Selawik</family><family>Open Sans</family></prefer></alias>
+            <alias><family>Segoe UI Semibold</family><prefer><family>Selawik Semibold</family><family>Open Sans SemiBold</family></prefer></alias>
+          </fontconfig>
+          XML
+          fc-cache -f >/dev/null
+      - name: Baixa do portal a configuração e as planilhas
+        run: |
+          python supabase/publicar_supabase.py baixar-config
+          python supabase/publicar_supabase.py montar-sovi-bruto
+          find dados/bases -type f | sort
+      - name: Calcula e gera as apresentações
+        run: |
+          python supabase/publicar_supabase.py status rodando "Calculando notas, SOVI e apresentações"
+          python gerador/processar.py
+      - name: Publica no portal
+        run: |
+          python supabase/publicar_supabase.py publicar
+          python supabase/publicar_supabase.py limpar-sovi-bruto
+          python supabase/publicar_supabase.py status ok "Portal atualizado"
+      - name: Avisa o portal se deu erro
+        if: failure()
+        run: |
+          msg=$(tail -c 1200 dados/saida/status_processamento.json 2>/dev/null || echo "veja o log no GitHub")
+          python supabase/publicar_supabase.py status erro "$msg"
