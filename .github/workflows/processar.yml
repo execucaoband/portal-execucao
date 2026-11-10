@@ -1,7 +1,8 @@
 # Processamento na nuvem: o administrador só sobe as planilhas na aba Cargas do portal.
 # A cada 10 minutos este robô confere no Supabase se chegou carga nova (ou alteração no Painel / "Processar agora").
 # Se chegou: baixa as planilhas, calcula, gera as apresentações e publica no portal. Ninguém precisa rodar nada no PC.
-# Segredo necessário (Settings → Secrets and variables → Actions): SUPABASE_SERVICE_KEY (chave service_role).
+# Segredos (Settings → Secrets and variables → Actions): SUPABASE_SERVICE_KEY (chave service_role);
+# para o aviso por e-mail aos gerentes: GMAIL_USER (conta Gmail) e GMAIL_APP_PASSWORD (senha de app do Google).
 name: Processar portal
 
 on:
@@ -109,6 +110,13 @@ jobs:
           python supabase/publicar_supabase.py publicar
           python supabase/publicar_supabase.py limpar-sovi-bruto
           python supabase/publicar_supabase.py status ok "Portal atualizado"
+      - name: Avisa os gerentes por e-mail (mês novo)
+        continue-on-error: true
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PORTAL_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: python supabase/publicar_supabase.py avisar
       - name: Avisa o portal se deu erro
         if: failure()
         run: |
