@@ -1,0 +1,6 @@
+{
+  "name": "gerador-apresentacoes-merchandising",
+  "private": true,
+  "description": "Gera as apresentações por gerência e o resumo executivo",
+  "dependencies": { "pptxgenjs": "4.0.1" }
+}
