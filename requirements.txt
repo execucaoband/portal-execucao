@@ -1,0 +1,11 @@
+# Necessário só para o PROCESSAMENTO (o portal em si não precisa de nada instalado)
+pandas==3.0.5
+numpy==2.5.3
+openpyxl==3.1.5
+python-calamine==0.9.0
+# apresentações em imagem (gráficos e tabelas não editáveis)
+python-pptx==1.0.2
+pypdfium2==5.13.0
+pillow==12.3.0
+# usa o PowerPoint instalado para gerar as imagens (fidelidade total); sem ele, usa o LibreOffice
+pywin32>=306; sys_platform == "win32"

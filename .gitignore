@@ -1,0 +1,28 @@
+# segredos (chave service_role) — nunca vão para o GitHub
+segredos.bat
+.env
+# resultados e caches gerados na máquina de processamento
+dados/saida/
+dados/cache/
+dados/sovi_resumos/
+dados/sovi_resumido/
+*.pkl
+# portal de demonstração tem dados embutidos — não publicar
+index_demo*.html
+# dependências
+node_modules
+gerador/deck_resumo.js
+__pycache__/
+*.pyc
+# planilhas brutas, caso alguém copie para cá por engano
+*.xlsx
+*.xlsb
+*.xls
+*.csv
+*.pptx
+# versão portátil (Python e Node.js embutidos) — distribuída à parte, não vai para o GitHub
+ferramentas/
+# nomes de gerentes e supervisores: ficam no Supabase (repositório pode ser público)
+dados/config/gerencias.json
+dados/config/supervisores.json
+dados/bases/
