@@ -1,0 +1,102 @@
+{
+ "2025": {
+  "SUPERMERCADO (AS 5-19CK)": {
+   "RED": 30.13,
+   "ICE": 32.43
+  },
+  "CASH & CARRY": {
+   "RED": 22.02,
+   "ICE": 22.02
+  },
+  "MINIMERCADO (AS 1-2CK)": {
+   "RED": 19.64,
+   "ICE": 19.74
+  },
+  "MINIMERCADO (AS 3-4CK)": {
+   "RED": 10.33,
+   "ICE": 10.43
+  },
+  "HIPERMERCADO (AS 20+CK)": {
+   "RED": 3.56,
+   "ICE": 3.66
+  },
+  "LANCHONETE": {
+   "RED": 3.12,
+   "ICE": 3.22
+  },
+  "PADARIA": {
+   "RED": 2.84,
+   "ICE": 2.94
+  },
+  "RESTAURANTE": {
+   "RED": 2.16,
+   "ICE": 2.16
+  },
+  "MERCEARIA": {
+   "RED": 1.65,
+   "ICE": 1.75
+  },
+  "BOTECO": {
+   "RED": 1.55,
+   "ICE": 1.65
+  },
+  "ADEGAS": {
+   "RED": 1.8,
+   "ICE": null
+  },
+  "CONVENIÊNCIA": {
+   "RED": 1.2,
+   "ICE": null
+  }
+ },
+ "2026": {
+  "SUPERMERCADO (AS 5-19CK)": {
+   "RED": 29.21,
+   "ICE": 30.21
+  },
+  "CASH & CARRY": {
+   "RED": 17.17,
+   "ICE": 17.17
+  },
+  "MINIMERCADO (AS 1-2CK)": {
+   "RED": 13.22,
+   "ICE": 13.22
+  },
+  "MINIMERCADO (AS 3-4CK)": {
+   "RED": 20.35,
+   "ICE": 20.95
+  },
+  "HIPERMERCADO (AS 20+CK)": {
+   "RED": 3.46,
+   "ICE": 3.46
+  },
+  "LANCHONETE": {
+   "RED": 3.45,
+   "ICE": 3.45
+  },
+  "PADARIA": {
+   "RED": 2.47,
+   "ICE": 2.47
+  },
+  "RESTAURANTE": {
+   "RED": 5.82,
+   "ICE": 6.82
+  },
+  "MERCEARIA": {
+   "RED": 1.1,
+   "ICE": 0.9
+  },
+  "BOTECO": {
+   "RED": 1.35,
+   "ICE": 1.35
+  },
+  "ADEGAS": {
+   "RED": 1.4,
+   "ICE": null
+  },
+  "CONVENIÊNCIA": {
+   "RED": 1.0,
+   "ICE": null
+  }
+ }
+}
