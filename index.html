@@ -538,7 +538,8 @@ const BS = {
     prog && prog(n, n);
     await this.setCfg("carga_pendente", true); this.registrar("enviou SOVI bruto", `${nome} (${(arq.size / 1048576).toFixed(0)} MB, ${n} partes)`);
   },
-  async processarAgora() { await this.setCfg("processar_agora", true); this.registrar("pediu processamento"); },
+  async processarAgora() {   // desmarca e marca de novo: o Supabase só aciona o robô quando o pedido muda de "não" para "sim"
+    await this.setCfg("processar_agora", false); await this.setCfg("processar_agora", true); this.registrar("pediu processamento"); },
   async enviarCarga(tipo, arq) {
     const { error } = await SB.storage.from(CONFIG.BUCKET).upload(`BASES/${tipo}/${arq.name}`, arq, { upsert: true, contentType: arq.type || "application/octet-stream" });
     if (error) throw new Erro("Não foi possível enviar " + arq.name + ": " + error.message);
@@ -1111,7 +1112,7 @@ async function abaProcessamento(){
       <div class="cgc-nome">Será salvo como <code id="cn_${t.k}">${nomePadrao(t.k,t.mensal?padraoMes(t.k):null,t.quais&&t.quais[0])}</code></div>
       <label class="btn pri cgc-bt"><input type="file" accept=".xlsx" hidden onchange="subirTipo('${t.k}',this.files[0]);this.value=''">⬆ Escolher arquivo e subir</label>
       <div class="cgc-st" id="cs_${t.k}">${t.k==="SOVI"&&L.some(c=>c.tipo==="SOVI_BRUTO")?`<div>⏳ Bruto aguardando a nuvem: <b>${L.filter(c=>c.tipo==="SOVI_BRUTO").map(c=>esc(c.nome.replace(/\.xlsx$/i,""))).join(", ")}</b></div>`:""}${n.length?(t.mensal?`No portal: <b>${ms.map(m=>MES3[+m.slice(5)-1]).join(", ")||n.length+" arquivo(s)"}</b>`:`Enviado em <b>${new Date(ult).toLocaleString("pt-BR")}</b>`):'<span class="muted">Nada enviado ainda</span>'}</div></div>`};
-  $("#aba").innerHTML=`<div class="panel" style="margin-top:0"><div class="panel-h"><h3>⬆ Cargas do mês</h3>${pc||pa?'<span class="pill w">planilhas novas: a nuvem processa em até 15 min</span>':'<span class="pill ok">sem cargas pendentes</span>'}</div>
+  $("#aba").innerHTML=`<div class="panel" style="margin-top:0"><div class="panel-h"><h3>⬆ Cargas do mês</h3>${pc||pa?'<span class="pill w">planilhas novas: a nuvem já está processando</span>':'<span class="pill ok">sem cargas pendentes</span>'}</div>
     <p class="note" style="margin-top:0">Escolha a base, o mês e o arquivo. Pode ser qualquer nome: o portal salva com o <b>nome padrão</b> que o processamento reconhece.</p>
     <div class="cgcards">${TIPOS_CARGA.map(card).join("")}</div>
     <div id="cgProg"></div>
@@ -1128,9 +1129,9 @@ async function abaProcessamento(){
   <div class="panel"><div class="panel-h"><h3>Processamento automático</h3>${SN?`<span class="pill ${{ok:"ok",erro:"bad",rodando:"w"}[SN.estado]||""}">${{ok:"✓ concluído",erro:"✕ erro",rodando:"⚙ processando…"}[SN.estado]||esc(SN.estado)}</span>`:""}</div>
     ${SN?`<p style="margin:0 0 6px"><b>${esc(SN.msg||"")}</b></p><p class="muted" style="margin:0">${SN.quando?new Date(SN.quando).toLocaleString("pt-BR"):""}${SN.log?` · <a href="${esc(SN.log)}" target="_blank" rel="noopener">ver detalhes</a>`:""}</p>`:'<p class="muted" style="margin:0">Ainda não rodou na nuvem.</p>'}
     <ol style="margin:10px 0 0;padding-left:18px;line-height:1.7"><li>Suba as planilhas do mês aqui em cima (o SOVI pode ser o bruto).</li>
-    <li>Em até <b>15 minutos</b> a nuvem calcula notas, SOVI, ranking e apresentações e publica sozinha. Não precisa rodar nada no computador.</li>
+    <li>A nuvem começa na hora: espera 1 minuto e meio (para as outras planilhas terminarem de subir), calcula notas, SOVI, ranking e apresentações e publica sozinha em cerca de 5 minutos. Não precisa rodar nada no computador.</li>
     <li>Mudou pesos, supervisores ou gerentes? Também entra na próxima rodada.</li></ol>
-    <button class="btn sm" style="margin-top:10px" onclick="processarAgora()" ${pc||pa||SN?.estado==="rodando"?"disabled":""}>⚙ Processar agora</button>
+    <button class="btn sm" style="margin-top:10px" onclick="processarAgora()" ${SN?.estado==="rodando"&&SN.quando&&Date.now()-Date.parse(SN.quando)<20*60000?"disabled":""}>⚙ Processar agora</button>
     <p class="note">As planilhas ficam numa pasta privada do Supabase que só administradores acessam.</p></div></div>`;
   clearTimeout(window.__tCg);if(pc||pa||SN?.estado==="rodando")window.__tCg=setTimeout(()=>{if(P==="painel"&&ABA==="processamento"&&!document.querySelector(".cg.env,.cgc-st .bar"))abaProcessamento()},15000);
   const z=$("#dropCg");if(z)["dragover","dragenter"].forEach(t=>z.addEventListener(t,e=>{e.preventDefault();z.classList.add("on")}));if(z){["dragleave","drop"].forEach(t=>z.addEventListener(t,()=>z.classList.remove("on")));
@@ -1164,9 +1165,9 @@ async function subirSoviBruto(f,mes,st){
   const nome=nomePadrao("SOVI_BRUTO",mes),mb=(f.size/1048576).toFixed(0);
   if((CACHE.cargas||[]).some(c=>(c.tipo==="SOVI"&&mesDoNome(c.nome)===mes)||(c.tipo==="SOVI_BRUTO"&&c.nome===nome))&&!confirm(`Já existe SOVI de ${mc(mes)} no portal. Substituir pelo arquivo novo?`))return;
   try{await B.enviarSoviBruto(f,nome,(a,b)=>{st.innerHTML=a<b?`<span class="muted">Enviando SOVI bruto de ${mc(mes)} (${mb} MB): parte ${a+1} de ${b}… não feche esta página</span><div class="bar"><i style="width:${Math.round(a/b*100)}%"></i></div>`:`<span class="muted">Finalizando…</span>`});
-    toast(`SOVI bruto de ${mc(mes)} enviado. A nuvem resume em até 15 min.`);await abaProcessamento()}catch(e){st.innerHTML=`<span class="bad">✕ ${esc(e.message)}</span>`;toast(e.message,1)}
+    toast(`SOVI bruto de ${mc(mes)} enviado. A nuvem começa a processar em instantes.`);await abaProcessamento()}catch(e){st.innerHTML=`<span class="bad">✕ ${esc(e.message)}</span>`;toast(e.message,1)}
 }
-async function processarAgora(){try{await B.processarAgora();toast("Pedido enviado: a nuvem processa em até 15 min.");abaProcessamento()}catch(e){toast(e.message,1)}}
+async function processarAgora(){try{await B.processarAgora();toast("Pedido enviado: a nuvem começa em instantes (cerca de 5 minutos no total).");abaProcessamento()}catch(e){toast(e.message,1)}}
 async function apagarCarga(t,n){if(!confirm(`Excluir ${n} do portal?`))return;try{await B.apagarCarga(t,n);toast("Arquivo excluído.");abaProcessamento()}catch(e){toast(e.message,1)}}
 async function abaConfig(){const [rk,E,ge,av,avl,avcc]=await Promise.all([B.getCfg("ranking_publico",true),B.auditoria(),B.getCfg("genero_empresa","M"),B.getCfg("aviso_email_ativo",true),B.getCfg("aviso_email_log",null),B.getCfg("aviso_email_cc",["welder.silva@rebic.com.br","vilmar.jose@rebic.com.br"])]);
   $("#aba").innerHTML=`<div class="grid2" style="margin-top:0"><div class="panel" style="margin-top:0"><div class="panel-h"><h3>Configurações</h3></div>
@@ -1179,7 +1180,7 @@ async function abaConfig(){const [rk,E,ge,av,avl,avcc]=await Promise.all([B.getC
     <p class="note">Conexão: ${B.modo==="supabase"?"Supabase ("+esc(CONFIG.SUPABASE_URL)+")":"modo demonstração (sem Supabase configurado)"}.</p></div>
   <div class="panel" style="margin-top:0"><div class="panel-h"><h3>Auditoria (últimos eventos)</h3></div><div class="tbl" style="max-height:420px"><table><thead><tr><th class="l">Quando</th><th class="l">Usuário</th><th class="l">Ação</th><th class="l">Detalhe</th></tr></thead><tbody>
     ${E.map(e=>`<tr><td class="l">${esc(e.quando)}</td><td class="l">${esc(e.usuario)}</td><td class="l">${esc(e.acao)}</td><td class="l" style="white-space:normal">${esc(e.detalhe)}</td></tr>`).join("")||'<tr><td colspan="4" class="muted">Sem eventos.</td></tr>'}</tbody></table></div></div></div>`}
-async function reenviarAviso(){if(!confirm("Reenviar o e-mail do último mês para todos os gerentes cadastrados?"))return;try{await B.setCfg("aviso_email_forcar",true);B.registrar("pediu reenvio do aviso por e-mail");toast("Pedido enviado: os e-mails saem na próxima rodada da nuvem (até 15 min).")}catch(e){toast(e.message,1)}}
+async function reenviarAviso(){if(!confirm("Reenviar o e-mail do último mês para todos os gerentes cadastrados?"))return;try{await B.setCfg("aviso_email_forcar",false);await B.setCfg("aviso_email_forcar",true);B.registrar("pediu reenvio do aviso por e-mail");toast("Pedido enviado: os e-mails saem na próxima rodada da nuvem (até 15 min).")}catch(e){toast(e.message,1)}}
 async function salvarCfg(){try{await B.setCfg("ranking_publico",$("#cfRank").checked);await B.setCfg("aviso_email_ativo",$("#cfAviso").checked);{const cc=$("#cfCC").value.split(/[,;\s]+/).map(x=>x.trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));await B.setCfg("aviso_email_cc",cc)}await B.setCfg("genero_empresa",$("#cfGen").value);await B.setCfg("pendente",true);B.registrar("alterou configurações","ranking_publico="+$("#cfRank").checked);toast("Configurações salvas.");await carregar();ir("painel")}catch(e){toast(e.message,1)}}
 /* ================= MINHA APRESENTAÇÃO (gerente) · REUNIÃO (diretoria) · MODO APRESENTAÇÃO ================= */
 let RE=null;                                   // dados da reunião carregados
