@@ -249,7 +249,7 @@ def cfg(chave, padrao=None):
 
 
 def precisa():
-    pend = [k for k in ("carga_pendente", "pendente", "processar_agora", "aviso_email_forcar") if cfg(k, False) is True]
+    pend = [k for k in ("carga_pendente", "pendente", "processar_agora") if cfg(k, False) is True]
     print("pendente:", ", ".join(pend) if pend else "nada")
     return bool(pend)
 
@@ -314,18 +314,23 @@ def _dt_br(v):
 def _corpo(nome, gcs, ref, link, prazo):
     import html
     m = int(ref[5:7]); rot = f"{MESES[m].capitalize()}/{ref[2:4]}"
-    lista = ", ".join(gcs)
-    pz = (f'<p style="margin:0 0 14px">Envie a versão final pelo portal até <b>{html.escape(prazo)}</b>.</p>' if prazo else "")
-    h = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+    lista = ", ".join(gcs); prim = (nome.split()[0].title() if nome else "")
+    pz_h = (f'<p style="margin:0 0 14px">Analise os números, complete o <b>Plano de Ação</b> e envie a versão final pelo portal até <b>{html.escape(prazo)}</b>. Depois desse horário, o envio é bloqueado.</p>'
+            if prazo else '<p style="margin:0 0 14px">Analise os números e complete o <b>Plano de Ação</b>.</p>')
+    pz_t = (f"Analise os números, complete o Plano de Ação e envie a versão final pelo portal até {prazo}. Depois desse horário, o envio é bloqueado.\n"
+            if prazo else "Analise os números e complete o Plano de Ação.\n")
+    h = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937;font-size:15px;line-height:1.5">
 <div style="background:#c8102e;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;font-size:18px;font-weight:600">Portal Execução</div>
 <div style="border:1px solid #e5e7eb;border-top:0;padding:22px;border-radius:0 0 10px 10px">
-<p style="margin:0 0 14px">Olá, {html.escape(nome.split()[0].title() if nome else "")}!</p>
-<p style="margin:0 0 14px">A apresentação de <b>{rot}</b> de <b>{html.escape(lista)}</b> já está pronta no Portal Execução, com os indicadores atualizados (RED, ICE, SOVI, pontuação e ranking).</p>
-{pz}<p style="margin:22px 0"><a href="{link}" style="background:#c8102e;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">Abrir o portal</a></p>
-<p style="margin:0;color:#6b7280;font-size:13px">Entre com o seu e-mail e senha. Este é um aviso automático: não precisa responder.</p></div></div>"""
-    txt = (f"Olá!\n\nA apresentação de {rot} de {lista} já está pronta no Portal Execução.\n"
-           + (f"Envie a versão final pelo portal até {prazo}.\n" if prazo else "") + f"\nAcesse: {link}\n")
-    return f"Portal Execução · apresentação de {rot} pronta", txt, h
+<p style="margin:0 0 14px">Olá, {html.escape(prim)}!</p>
+<p style="margin:0 0 14px">A apresentação de Indicadores de Merchandising de <b>{rot}</b> da(s) <b>{html.escape(lista)}</b> já está disponível no Portal Execução, com os resultados atualizados de RED, ICE, SOVI, CPI, TOM, pontuação e ranking.</p>
+{pz_h}<p style="margin:22px 0"><a href="{link}" style="background:#c8102e;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">Abrir o Portal Execução</a></p>
+<p style="margin:0 0 14px">Qualquer dúvida, é só me chamar.</p>
+<p style="margin:0">Obrigado,<br><b>Welder Silva</b><br><span style="color:#6b7280">Execução de Mercado</span></p></div></div>"""
+    txt = (f"Olá, {prim}!\n\nA apresentação de Indicadores de Merchandising de {rot} da(s) {lista} já está disponível no Portal Execução, "
+           f"com os resultados atualizados de RED, ICE, SOVI, CPI, TOM, pontuação e ranking.\n\n{pz_t}\nAbrir o Portal Execução: {link}\n\n"
+           "Qualquer dúvida, é só me chamar.\n\nObrigado,\nWelder Silva\nExecução de Mercado\n")
+    return f"Indicadores de Merchandising {rot} · apresentação disponível", txt, h
 
 
 class _Graph:
@@ -340,8 +345,9 @@ class _Graph:
                 self.tok = json.loads(r.read())["access_token"]
         except urllib.error.HTTPError as x:
             raise RuntimeError(f"Microsoft recusou o acesso: {x.read().decode(errors='replace')[:300]}")
-    def enviar(self, para, assunto, txt, h):
-        msg = {"message": {"subject": assunto, "body": {"contentType": "HTML", "content": h}, "toRecipients": [{"emailAddress": {"address": para}}]}, "saveToSentItems": True}
+    def enviar(self, para, assunto, txt, h, cc=()):
+        msg = {"message": {"subject": assunto, "body": {"contentType": "HTML", "content": h}, "toRecipients": [{"emailAddress": {"address": para}}],
+                           "ccRecipients": [{"emailAddress": {"address": c}} for c in cc]}, "saveToSentItems": True}
         rq = urllib.request.Request(f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(self.de)}/sendMail", data=json.dumps(msg).encode(),
                                     headers={"Authorization": f"Bearer {self.tok}", "Content-Type": "application/json"})
         try: urllib.request.urlopen(rq, timeout=60).read()
@@ -360,14 +366,18 @@ class _Smtp:
         host = e.get("SMTP_HOST", "").strip() or ("smtp.gmail.com" if self.de.endswith("@gmail.com") else "smtp.office365.com")
         porta = int(e.get("SMTP_PORT", "").strip() or 587)
         self.s = smtplib.SMTP(host, porta, timeout=60); self.s.starttls(context=ssl.create_default_context()); self.s.login(self.de, senha)
-    def enviar(self, para, assunto, txt, h):
+    def enviar(self, para, assunto, txt, h, cc=()):
         from email.message import EmailMessage
         from email.utils import formataddr
         m = EmailMessage(); m["Subject"] = assunto; m["From"] = formataddr(("Portal Execução", self.de)); m["To"] = para
+        if cc: m["Cc"] = ", ".join(cc)
         m.set_content(txt); m.add_alternative(h, subtype="html"); self.s.send_message(m)
     def fechar(self):
         try: self.s.quit()
         except Exception: pass
+
+
+CC_PADRAO = ["welder.silva@rebic.com.br", "vilmar.jose@rebic.com.br"]   # cópia de cada aviso (editável no Painel → Configurações)
 
 
 def _remetente():
@@ -375,6 +385,33 @@ def _remetente():
     if all(e.get(k, "").strip() for k in ("OUTLOOK_TENANT_ID", "OUTLOOK_CLIENT_ID", "OUTLOOK_CLIENT_SECRET", "OUTLOOK_REMETENTE")): return _Graph
     if (e.get("EMAIL_USER") and e.get("EMAIL_PASSWORD")) or (e.get("GMAIL_USER") and e.get("GMAIL_APP_PASSWORD")): return _Smtp
     return None
+
+
+def _destinatarios():
+    perfis = req("GET", "/rest/v1/perfis?select=id,nome,email,perfil,ativo,pode_ver&ativo=eq.true&pode_ver=eq.true&perfil=eq.usuario") or []
+    vinc = req("GET", "/rest/v1/usuario_gc?select=usuario_id,gc") or []
+    gcs = {}
+    for v in vinc: gcs.setdefault(v["usuario_id"], []).append(v["gc"])
+    return [(p["nome"], p["email"], sorted(gcs[p["id"]])) for p in perfis if gcs.get(p["id"]) and p.get("email")]
+
+
+def _ja_avisados(ref):
+    E = cfg("aviso_email_enviados") or {}
+    return {e.lower() for e in E.get("emails", [])} if E.get("ref") == ref else set()
+
+
+def precisa_aviso():
+    """conferência leve (sem processar nada): há gerente cadastrado que ainda não recebeu o aviso do mês atual?"""
+    if not _remetente() or cfg("aviso_email_ativo", True) is False:
+        return False
+    meta = req("GET", "/rest/v1/portal_meta?select=payload&id=eq.1") or []
+    if not meta: return False
+    ref = meta[0]["payload"]["meses"][-1]
+    if cfg("aviso_email_forcar", False) is True: return True
+    ja = _ja_avisados(ref)
+    novos = [d for d in _destinatarios() if d[1].lower() not in ja]
+    print(f"aviso de {ref}: {len(novos)} gerente(s) a avisar")
+    return bool(novos)
 
 
 def avisar():
@@ -388,15 +425,12 @@ def avisar():
     if not meta: print("Nada publicado ainda."); return 0
     ref = meta[0]["payload"]["meses"][-1]
     forcar = cfg("aviso_email_forcar", False) is True
-    if cfg("aviso_email_ref") == ref and not forcar:     # só avisa quando chega um mês novo (reprocessar o mesmo mês não manda de novo)
-        print(f"Os gerentes já foram avisados de {ref}."); return 0
-    perfis = req("GET", "/rest/v1/perfis?select=id,nome,email,perfil,ativo,pode_ver&ativo=eq.true&pode_ver=eq.true&perfil=eq.usuario") or []
-    vinc = req("GET", "/rest/v1/usuario_gc?select=usuario_id,gc") or []
-    gcs = {}
-    for v in vinc: gcs.setdefault(v["usuario_id"], []).append(v["gc"])
-    dest = [(p["nome"], p["email"], sorted(gcs[p["id"]])) for p in perfis if gcs.get(p["id"]) and p.get("email")]
+    todos = _destinatarios()
+    ja = _ja_avisados(ref)
+    # cada gerente recebe o aviso do mês uma vez só: quem for cadastrado depois recebe na próxima conferência do robô
+    dest = todos if forcar else [d for d in todos if d[1].lower() not in ja]
     if not dest:
-        desliga(); print("Nenhum gerente com e-mail e gerência cadastrados no portal. Nada enviado."); return 0
+        desliga(); print(f"Nenhum gerente novo para avisar de {ref} ({len(todos)} cadastrado(s), {len(ja)} já avisado(s))."); return 0
     P = cfg("prazo_envio") or {}
     fecha = P.get("fecha")
     prazo = _dt_br(fecha) if fecha and fecha > time.strftime("%Y-%m-%dT%H:%M") else ""
@@ -408,12 +442,17 @@ def avisar():
         desliga(); log(0, [f"o servidor de e-mail recusou o acesso: {e}"])
         raise SystemExit(f"O servidor de e-mail recusou o acesso ({e}). Confira os segredos no GitHub.")
     ok, falhas = [], []
+    cc_cfg = cfg("aviso_email_cc", None)
+    cc_base = [c.strip() for c in (cc_cfg if isinstance(cc_cfg, list) else CC_PADRAO) if c and "@" in c]
     for nome, email, g in dest:
         assunto, txt, h = _corpo(nome, g, ref, link, prazo)
-        try: env.enviar(email, assunto, txt, h); ok.append(email)
+        cc = [c for c in cc_base if c.lower() != email.lower()]
+        try: env.enviar(email, assunto, txt, h, cc); ok.append(email)
         except Exception as e: falhas.append(f"{email}: {e}")
     env.fechar()
-    upsert("config", [{"chave": "aviso_email_ref", "valor": ref}, {"chave": "aviso_email_forcar", "valor": False}], "chave")
+    ja |= {e.lower() for e in ok}
+    upsert("config", [{"chave": "aviso_email_ref", "valor": ref}, {"chave": "aviso_email_forcar", "valor": False},
+                      {"chave": "aviso_email_enviados", "valor": {"ref": ref, "emails": sorted(ja)}}], "chave")
     log(len(ok), falhas)
     print(f"Aviso de {ref}: {len(ok)} e-mail(s) enviado(s)" + (f", {len(falhas)} falha(s): {falhas}" if falhas else "."))
     return len(ok)
@@ -430,4 +469,5 @@ if __name__ == "__main__":
     elif cmd == "montar-sovi-bruto": print(f"{montar_sovi_bruto()} SOVI bruto(s) montado(s).")
     elif cmd == "limpar-sovi-bruto": limpar_sovi_bruto()
     elif cmd == "avisar": avisar()
+    elif cmd == "precisa-aviso": sys.exit(0 if precisa_aviso() else 1)
     else: print(__doc__)
