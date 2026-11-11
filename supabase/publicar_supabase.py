@@ -371,13 +371,16 @@ class _Smtp:
         from email.utils import formataddr
         m = EmailMessage(); m["Subject"] = assunto; m["From"] = formataddr(("Portal Execução", self.de)); m["To"] = para
         if cc: m["Cc"] = ", ".join(cc)
+        rt = os.environ.get("EMAIL_REPLY_TO", "").strip() or RESPONDER_PARA
+        if rt and rt.lower() != self.de.lower(): m["Reply-To"] = rt   # respostas dos gerentes vão para o Welder, não para o Gmail
         m.set_content(txt); m.add_alternative(h, subtype="html"); self.s.send_message(m)
     def fechar(self):
         try: self.s.quit()
         except Exception: pass
 
 
-CC_PADRAO = ["welder.silva@rebic.com.br", "vilmar.jose@rebic.com.br"]   # cópia de cada aviso (editável no Painel → Configurações)
+CC_PADRAO = ["welder.silva@rebic.com.br", "vilmar.jose@rebic.com.br"]
+RESPONDER_PARA = "welder.silva@rebic.com.br"   # cópia de cada aviso (editável no Painel → Configurações)
 
 
 def _remetente():
