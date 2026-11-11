@@ -59,10 +59,13 @@ def mes_da_data(s):
 
 
 def load(path):
-    st = os.stat(path); key = hashlib.md5(f"{os.path.basename(path)}{st.st_size}{st.st_mtime}".encode()).hexdigest()
+    # chave: nome + tamanho + data em segundos (o cache da nuvem guarda a data sem as frações de segundo)
+    st = os.stat(path); key = hashlib.md5(f"{os.path.basename(path)}{st.st_size}{int(st.st_mtime)}".encode()).hexdigest()
     cp = os.path.join(CACHE, key + ".pkl")
     if os.path.exists(cp):
         x = pd.read_pickle(cp)
+        try: os.utime(cp)          # marca como usado (a nuvem descarta o que não é usado há mais de 1 dia)
+        except OSError: pass
     else:
         x = pd.read_excel(path, dtype=str)
         x = x[[c for c in COLS if c in x.columns]]

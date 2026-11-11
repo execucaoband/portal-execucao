@@ -286,7 +286,10 @@ def regras(escopo, m, a):
 def gerar():
     meses = sorted(set(pesq["ICE"].mes) | set(pesq["RED"].mes))
     out = {"meses": meses, "por_mes": {}}
-    for a, m in zip(meses, meses[1:]):
+    pares = list(zip(meses, meses[1:]))
+    if os.environ.get("INSIGHTS_ULTIMO") == "1" and pares:   # nuvem: só o último mês (os anteriores já estão publicados)
+        pares, out["parcial"] = pares[-1:], True
+    for a, m in pares:
         R = {}
         for esc in ["EMPRESA"] + list(D["gcs"]):
             sel = (lambda x: x) if esc == "EMPRESA" else (lambda x, e=esc: x[x.gc == e])
