@@ -414,6 +414,19 @@ def precisa_aviso():
     return bool(novos)
 
 
+def testar_email():
+    """manda um e-mail de exemplo só para o próprio remetente (confere se o Outlook aceita o envio)"""
+    Classe = _remetente()
+    if not Classe: raise SystemExit("Remetente não configurado no GitHub (EMAIL_USER + EMAIL_PASSWORD, ou os segredos OUTLOOK_*).")
+    meta = req("GET", "/rest/v1/portal_meta?select=payload&id=eq.1") or []
+    ref = meta[0]["payload"]["meses"][-1] if meta else time.strftime("%Y-%m")
+    link = os.environ.get("PORTAL_URL", "").strip() or "https://execucaoband.github.io/portal-execucao/"
+    env = Classe(); de = env.de
+    assunto, txt, h = _corpo("Welder Silva", ["GC. AN (exemplo)"], ref, link, "")
+    env.enviar(de, "[TESTE] " + assunto, txt, h); env.fechar()
+    print(f"E-mail de teste enviado para {de}. Confira a caixa de entrada.")
+
+
 def avisar():
     desliga = lambda: upsert("config", [{"chave": "aviso_email_forcar", "valor": False}], "chave")   # nunca deixa o robô em laço
     Classe = _remetente()
@@ -470,4 +483,5 @@ if __name__ == "__main__":
     elif cmd == "limpar-sovi-bruto": limpar_sovi_bruto()
     elif cmd == "avisar": avisar()
     elif cmd == "precisa-aviso": sys.exit(0 if precisa_aviso() else 1)
+    elif cmd == "testar-email": testar_email()
     else: print(__doc__)
