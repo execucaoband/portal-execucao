@@ -9,7 +9,7 @@
     status <estado> [mensagem]  → grava no portal o andamento (aguardando, rodando, ok, erro)
     montar-sovi-bruto   → junta as partes do SOVI bruto enviadas pelo portal (BASES/SOVI_BRUTO) em dados/bases/SOVI_BRUTO
     limpar-sovi-bruto   → apaga do Supabase as partes do SOVI bruto que já viraram SOVI resumido
-    avisar              → e-mail aos gerentes quando um mês novo é publicado (GMAIL_USER / GMAIL_APP_PASSWORD)
+    avisar              → e-mail aos gerentes quando um mês novo é publicado (Outlook pelo Microsoft Graph, ou SMTP)
 
 Variáveis de ambiente (só na máquina de processamento – NUNCA no HTML):
     SUPABASE_URL           ex.: https://xxxx.supabase.co
@@ -210,7 +210,10 @@ def publicar():
     upsert("dados_gc", [{"gc": g, "payload": G} for g, G in PD["gcs"].items()], "gc")
     upsert("dados_empresa", [{"id": 1, "payload": {k: PD.get(k) for k in ("empresa", "empresa_canal", "empresa_pilar")}}], "id")
     print("3/6 insights")
-    req("DELETE", "/rest/v1/insights?mes=neq.__", extra={"Prefer": "return=minimal"})
+    if INS.get("parcial"):   # só o último mês foi recalculado: os insights dos meses anteriores ficam como estão
+        for m in INS["por_mes"]: req("DELETE", f"/rest/v1/insights?mes=eq.{m}", extra={"Prefer": "return=minimal"})
+    else:
+        req("DELETE", "/rest/v1/insights?mes=neq.__", extra={"Prefer": "return=minimal"})
     upsert("insights", [{"mes": m, "escopo": e, "payload": v} for m, R in INS["por_mes"].items() for e, v in R.items()], "mes,escopo")
     print("4/6 ranking")
     req("DELETE", "/rest/v1/ranking_gc?mes=neq.__", extra={"Prefer": "return=minimal"})
@@ -225,7 +228,12 @@ def publicar():
     print("   SOVI resumidos (backup para outras máquinas)")
     enviar_sovi()
     print("6/6 publicação")
-    upsert("portal_meta", [{"id": 1, "payload": {"meses": PD["meses"], "ano": PD.get("ano"), "pontos_regra": PT, "decks": dk},
+    # histórico: as apresentações de meses anteriores continuam no Storage e podem ser baixadas no portal
+    antes = (req("GET", "/rest/v1/portal_meta?select=payload&id=eq.1") or [{}])[0].get("payload") or {}
+    hist = dict(antes.get("decks_hist") or {})
+    if (antes.get("decks") or {}).get("ref"): hist[antes["decks"]["ref"]] = antes["decks"]
+    hist[dk["ref"]] = dk
+    upsert("portal_meta", [{"id": 1, "payload": {"meses": PD["meses"], "ano": PD.get("ano"), "pontos_regra": PT, "decks": dk, "decks_hist": hist},
                             "publicado_em": time.strftime("%Y-%m-%dT%H:%M:%S%z")}], "id")
     upsert("config", [{"chave": "pendente", "valor": False}, {"chave": "carga_pendente", "valor": False}], "chave")
     print("Portal atualizado.")
@@ -320,18 +328,67 @@ def _corpo(nome, gcs, ref, link, prazo):
     return f"Portal Execução · apresentação de {rot} pronta", txt, h
 
 
+class _Graph:
+    """Outlook / Microsoft 365 pelo Microsoft Graph (OAuth, o jeito que a Microsoft mantém).
+    Segredos: OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET e OUTLOOK_REMETENTE (caixa que envia)."""
+    def __init__(self):
+        e = os.environ
+        self.tenant, self.cid, self.sec, self.de = (e.get(k, "").strip() for k in ("OUTLOOK_TENANT_ID", "OUTLOOK_CLIENT_ID", "OUTLOOK_CLIENT_SECRET", "OUTLOOK_REMETENTE"))
+        corpo = urllib.parse.urlencode({"client_id": self.cid, "client_secret": self.sec, "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"}).encode()
+        try:
+            with urllib.request.urlopen(urllib.request.Request(f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token", data=corpo), timeout=60) as r:
+                self.tok = json.loads(r.read())["access_token"]
+        except urllib.error.HTTPError as x:
+            raise RuntimeError(f"Microsoft recusou o acesso: {x.read().decode(errors='replace')[:300]}")
+    def enviar(self, para, assunto, txt, h):
+        msg = {"message": {"subject": assunto, "body": {"contentType": "HTML", "content": h}, "toRecipients": [{"emailAddress": {"address": para}}]}, "saveToSentItems": True}
+        rq = urllib.request.Request(f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(self.de)}/sendMail", data=json.dumps(msg).encode(),
+                                    headers={"Authorization": f"Bearer {self.tok}", "Content-Type": "application/json"})
+        try: urllib.request.urlopen(rq, timeout=60).read()
+        except urllib.error.HTTPError as x: raise RuntimeError(x.read().decode(errors="replace")[:300])
+    def fechar(self): pass
+
+
+class _Smtp:
+    """Outlook por SMTP (smtp.office365.com:587) com e-mail e senha. A Microsoft está desligando esse modo
+    (desligado por padrão a partir do fim de 2026): use enquanto a sua TI permitir. Também serve para Gmail (SMTP_HOST=smtp.gmail.com)."""
+    def __init__(self):
+        import smtplib, ssl
+        e = os.environ
+        self.de = (e.get("EMAIL_USER") or e.get("GMAIL_USER") or "").strip()
+        senha = (e.get("EMAIL_PASSWORD") or re.sub(r"\s+", "", e.get("GMAIL_APP_PASSWORD", ""))).strip()
+        host = e.get("SMTP_HOST", "").strip() or ("smtp.gmail.com" if self.de.endswith("@gmail.com") else "smtp.office365.com")
+        porta = int(e.get("SMTP_PORT", "").strip() or 587)
+        self.s = smtplib.SMTP(host, porta, timeout=60); self.s.starttls(context=ssl.create_default_context()); self.s.login(self.de, senha)
+    def enviar(self, para, assunto, txt, h):
+        from email.message import EmailMessage
+        from email.utils import formataddr
+        m = EmailMessage(); m["Subject"] = assunto; m["From"] = formataddr(("Portal Execução", self.de)); m["To"] = para
+        m.set_content(txt); m.add_alternative(h, subtype="html"); self.s.send_message(m)
+    def fechar(self):
+        try: self.s.quit()
+        except Exception: pass
+
+
+def _remetente():
+    e = os.environ
+    if all(e.get(k, "").strip() for k in ("OUTLOOK_TENANT_ID", "OUTLOOK_CLIENT_ID", "OUTLOOK_CLIENT_SECRET", "OUTLOOK_REMETENTE")): return _Graph
+    if (e.get("EMAIL_USER") and e.get("EMAIL_PASSWORD")) or (e.get("GMAIL_USER") and e.get("GMAIL_APP_PASSWORD")): return _Smtp
+    return None
+
+
 def avisar():
-    usuario, senha = os.environ.get("GMAIL_USER", "").strip(), re.sub(r"\s+", "", os.environ.get("GMAIL_APP_PASSWORD", ""))
     desliga = lambda: upsert("config", [{"chave": "aviso_email_forcar", "valor": False}], "chave")   # nunca deixa o robô em laço
-    if not usuario or not senha:
-        desliga(); print("Aviso por e-mail: segredos GMAIL_USER / GMAIL_APP_PASSWORD não cadastrados no GitHub. Nada enviado."); return 0
+    Classe = _remetente()
+    if not Classe:
+        desliga(); print("Aviso por e-mail: remetente não configurado no GitHub (Outlook: OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET, OUTLOOK_REMETENTE; ou EMAIL_USER e EMAIL_PASSWORD). Nada enviado."); return 0
     if cfg("aviso_email_ativo", True) is False:
         desliga(); print("Aviso por e-mail desligado no Painel (Configurações)."); return 0
     meta = req("GET", "/rest/v1/portal_meta?select=payload&id=eq.1") or []
     if not meta: print("Nada publicado ainda."); return 0
     ref = meta[0]["payload"]["meses"][-1]
     forcar = cfg("aviso_email_forcar", False) is True
-    if cfg("aviso_email_ref") == ref and not forcar:
+    if cfg("aviso_email_ref") == ref and not forcar:     # só avisa quando chega um mês novo (reprocessar o mesmo mês não manda de novo)
         print(f"Os gerentes já foram avisados de {ref}."); return 0
     perfis = req("GET", "/rest/v1/perfis?select=id,nome,email,perfil,ativo,pode_ver&ativo=eq.true&pode_ver=eq.true&perfil=eq.usuario") or []
     vinc = req("GET", "/rest/v1/usuario_gc?select=usuario_id,gc") or []
@@ -344,27 +401,22 @@ def avisar():
     fecha = P.get("fecha")
     prazo = _dt_br(fecha) if fecha and fecha > time.strftime("%Y-%m-%dT%H:%M") else ""
     link = os.environ.get("PORTAL_URL", "").strip() or "https://execucaoband.github.io/portal-execucao/"
-    import smtplib, ssl
-    from email.message import EmailMessage
-    from email.utils import formataddr
-    ok, falhas = [], []
+    log = lambda n, f: upsert("config", [{"chave": "aviso_email_log", "valor": {"ref": ref, "quando": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "enviados": n, "falhas": f[:20]}}], "chave")
     try:
-        smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context(), timeout=60); smtp.login(usuario, senha)
+        env = Classe()
     except Exception as e:
-        desliga(); upsert("config", [{"chave": "aviso_email_log", "valor": {"ref": ref, "quando": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "enviados": 0, "falhas": [f"login no Gmail recusado: {e}"]}}], "chave")
-        raise SystemExit(f"Gmail recusou o login ({e}). Confira o GMAIL_USER e a senha de app no GitHub.")
-    with smtp:
-        for nome, email, g in dest:
-            assunto, txt, h = _corpo(nome, g, ref, link, prazo)
-            m = EmailMessage(); m["Subject"] = assunto; m["From"] = formataddr(("Portal Execução", usuario)); m["To"] = email
-            m.set_content(txt); m.add_alternative(h, subtype="html")
-            try: smtp.send_message(m); ok.append(email)
-            except Exception as e: falhas.append(f"{email}: {e}")
-    upsert("config", [{"chave": "aviso_email_ref", "valor": ref}, {"chave": "aviso_email_forcar", "valor": False},
-                      {"chave": "aviso_email_log", "valor": {"ref": ref, "quando": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "enviados": len(ok), "falhas": falhas[:20]}}], "chave")
+        desliga(); log(0, [f"o servidor de e-mail recusou o acesso: {e}"])
+        raise SystemExit(f"O servidor de e-mail recusou o acesso ({e}). Confira os segredos no GitHub.")
+    ok, falhas = [], []
+    for nome, email, g in dest:
+        assunto, txt, h = _corpo(nome, g, ref, link, prazo)
+        try: env.enviar(email, assunto, txt, h); ok.append(email)
+        except Exception as e: falhas.append(f"{email}: {e}")
+    env.fechar()
+    upsert("config", [{"chave": "aviso_email_ref", "valor": ref}, {"chave": "aviso_email_forcar", "valor": False}], "chave")
+    log(len(ok), falhas)
     print(f"Aviso de {ref}: {len(ok)} e-mail(s) enviado(s)" + (f", {len(falhas)} falha(s): {falhas}" if falhas else "."))
     return len(ok)
-
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
