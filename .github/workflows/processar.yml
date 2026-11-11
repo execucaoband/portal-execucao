@@ -31,6 +31,14 @@ permissions:
 env:
   ANO: "2026"
   PYTHONUTF8: "1"
+  # remetente do aviso por e-mail (Outlook: Microsoft Graph; ou SMTP)
+  OUTLOOK_TENANT_ID: ${{ secrets.OUTLOOK_TENANT_ID }}
+  OUTLOOK_CLIENT_ID: ${{ secrets.OUTLOOK_CLIENT_ID }}
+  OUTLOOK_CLIENT_SECRET: ${{ secrets.OUTLOOK_CLIENT_SECRET }}
+  OUTLOOK_REMETENTE: ${{ secrets.OUTLOOK_REMETENTE }}
+  EMAIL_USER: ${{ secrets.EMAIL_USER }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  SMTP_HOST: ${{ secrets.SMTP_HOST }}
 
 jobs:
   verificar:
@@ -38,6 +46,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       rodar: ${{ steps.v.outputs.rodar }}
+      aviso: ${{ steps.v.outputs.aviso }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +68,8 @@ jobs:
           if [ -z "$SUPABASE_SERVICE_KEY" ]; then echo "::error::Cadastre o segredo SUPABASE_SERVICE_KEY em Settings > Secrets and variables > Actions"; exit 1; fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.forcar }}" = "true" ]; then echo "rodar=1" >> "$GITHUB_OUTPUT"; exit 0; fi
           if python supabase/publicar_supabase.py precisa; then echo "rodar=1" >> "$GITHUB_OUTPUT"; else echo "rodar=0" >> "$GITHUB_OUTPUT"; fi
+          # gerente cadastrado que ainda não recebeu o aviso do mês atual? (não reprocessa nada, só envia o e-mail)
+          if python supabase/publicar_supabase.py precisa-aviso; then echo "aviso=1" >> "$GITHUB_OUTPUT"; else echo "aviso=0" >> "$GITHUB_OUTPUT"; fi
 
   processar:
     needs: verificar
@@ -146,13 +157,6 @@ jobs:
       - name: Avisa os gerentes por e-mail (mês novo)
         continue-on-error: true
         env:
-          OUTLOOK_TENANT_ID: ${{ secrets.OUTLOOK_TENANT_ID }}
-          OUTLOOK_CLIENT_ID: ${{ secrets.OUTLOOK_CLIENT_ID }}
-          OUTLOOK_CLIENT_SECRET: ${{ secrets.OUTLOOK_CLIENT_SECRET }}
-          OUTLOOK_REMETENTE: ${{ secrets.OUTLOOK_REMETENTE }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
           PORTAL_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
         run: python supabase/publicar_supabase.py avisar
       - name: Avisa o portal se deu erro
@@ -160,3 +164,21 @@ jobs:
         run: |
           msg=$(tail -c 1200 dados/saida/status_processamento.json 2>/dev/null || echo "veja o log no GitHub")
           python supabase/publicar_supabase.py status erro "$msg"
+
+  avisar:
+    # só e-mail: gerentes cadastrados depois da publicação recebem o aviso do mês atual em até ~10 min
+    needs: verificar
+    if: needs.verificar.outputs.aviso == '1' && needs.verificar.outputs.rodar != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      PORTAL_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Envia o aviso aos gerentes que ainda não receberam
+        run: |
+          export SUPABASE_URL=$(grep -oE 'https://[a-z0-9]+\.supabase\.co' config.js | head -1)
+          python supabase/publicar_supabase.py avisar
