@@ -20,6 +20,10 @@ on:
         description: "Refazer tudo do zero (todos os meses, sem aproveitar o que já foi lido)"
         type: boolean
         default: false
+      origem:
+        description: "Quem pediu (portal = acionado pelo Supabase)"
+        type: string
+        default: ""
       teste_email:
         description: "Só mandar um e-mail de teste para o remetente (não processa nada)"
         type: boolean
@@ -70,6 +74,8 @@ jobs:
         run: |
           export SUPABASE_URL=$(grep -oE 'https://[a-z0-9]+\.supabase\.co' config.js | head -1)
           if [ -z "$SUPABASE_SERVICE_KEY" ]; then echo "::error::Cadastre o segredo SUPABASE_SERVICE_KEY em Settings > Secrets and variables > Actions"; exit 1; fi
+          # acionado pelo portal: espera 1 min e meio para as outras planilhas do mesmo envio terminarem de subir
+          if [ "${{ inputs.origem }}" = "portal" ]; then sleep 90; fi
           if [ "${{ inputs.teste_email }}" = "true" ]; then echo "rodar=0" >> "$GITHUB_OUTPUT"; echo "aviso=0" >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.forcar }}" = "true" ]; then echo "rodar=1" >> "$GITHUB_OUTPUT"; exit 0; fi
           if python supabase/publicar_supabase.py precisa; then echo "rodar=1" >> "$GITHUB_OUTPUT"; else echo "rodar=0" >> "$GITHUB_OUTPUT"; fi
