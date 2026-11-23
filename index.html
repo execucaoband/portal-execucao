@@ -837,7 +837,8 @@ const tomDe=(g,m)=>D.gcs[g].tom.find(t=>t.lbl===ml(m));
 const ant=m=>{const i=D.meses.indexOf(m);return i>0?D.meses[i-1]:null};
 function pontuacao(m,ice,cpi,tom,cp){const R=PT(),iceOk=ice==null?null:ice>=R.ICE_MIN,cpiOk=cpi?cpi.real>=cpi.meta:null,tomOk=tom?tom.realizou==="SIM":null,
   plus=cp!=null&&ice!=null&&m>=R.INICIO_PLUS?ice>=cp:null;return{iceOk,cpiOk,tomOk,plus,total:(iceOk?R.ICE:0)+(cpiOk?R.CPI:0)+(tomOk?R.TOM:0)+(plus?R.PLUS:0)}}
-const ptsGC=(g,m)=>pontuacao(m,linha(g,m).ICE,cpiDe(g,m),tomDe(g,m),D.gcs[g].compromisso);
+const notaPont=(g,m)=>{const r=linha(g,m),k=(PT().NOTA_GC||{})[g];return k?r[k]:r.ICE};   // GC. DI (sem pesquisa de ICE) pontua pelo RED
+const ptsGC=(g,m)=>pontuacao(m,notaPont(g,m),cpiDe(g,m),tomDe(g,m),D.gcs[g].compromisso);
 // indicadores do resumo: [chave, rótulo, valor(g,m), formato, maior é melhor]
 const IND=[
   ["ICE","ICE Latam",(g,m)=>linha(g,m).ICE,v=>f(v)],
@@ -995,7 +996,7 @@ function ranking(){
   $("#page").innerHTML=`<div class="bar"><div><b>Ranking completo</b><div class="muted" style="font-size:12px">Classificação pelo total de pontos · empate decidido pela nota ICE · gerente com 2 gerências pontua pela média</div></div><span class="sp"></span>${filtroData()}</div>
   <div class="grid2">${tab(`🍽 Jantar romântico · ${ml(m)}`,"1º lugar do mês",mes,i=>i===0?'<span class="pill w">Jantar</span>':"")}
     ${tab(`🏆 Melhores do ano · parcial ${m.slice(0,4)}`,`acumulado até ${ml(m)}`,ano,i=>i<3?`<span class="pill w">R$ ${N(PREM[i])}</span>`:"")}</div>
-  <p class="note">Pontos do mês: ICE ≥ ${PT().ICE_MIN} = 5 mil · CPI ≥ meta = 3 mil · TOM = 2 mil · ICE ≥ compromisso = +1 mil (a partir de julho). Gerência sem pesquisa de ICE no mês fica fora da média do gerente.</p>`;
+  <p class="note">Pontos do mês: ICE ≥ ${PT().ICE_MIN} = 5 mil · CPI ≥ meta = 3 mil · TOM = 2 mil · ICE ≥ compromisso = +1 mil (a partir de julho). ${Object.keys(PT().NOTA_GC||{}).length?Object.entries(PT().NOTA_GC).map(([g,k])=>`${g} não tem pesquisa de ICE: pontua pelo ${k} (≥ ${PT().ICE_MIN} e compromisso). `).join(""):""}Gerência sem a nota no mês fica fora da média do gerente.</p>`;
 }
 /* ================= PAINEL GERENCIAL (admin) ================= */
 function generoNome(n){const p=(n||"").trim().split(/\s+/)[0].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
