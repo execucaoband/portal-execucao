@@ -49,8 +49,9 @@ def ranking_gc(PD):
         for m in PD["meses"]:
             r = next((x for x in G["mensal"] if x["mes"] == m), {}) or {}
             c = next((x for x in G["cpi"] if x["mes"] == m), None); t = next((x for x in G["tom"] if x["lbl"] == MESES[int(m[5:7])]), None)
-            if r.get("ICE") is None: continue          # gerência sem pesquisa de ICE no mês fica fora da média do gerente
-            out.append({"mes": m, "gc": g, "pts": pontos(m, r.get("ICE"), c, t, G.get("compromisso")), "ice": r.get("ICE")})
+            nota = r.get("PONT", r.get("ICE"))         # ICE Latam; GC. DI (sem pesquisa de ICE) pontua pelo RED
+            if nota is None: continue                  # gerência sem a nota de pontuação no mês fica fora da média do gerente
+            out.append({"mes": m, "gc": g, "pts": pontos(m, nota, c, t, G.get("compromisso")), "ice": nota})
     return out
 
 
@@ -233,7 +234,7 @@ def publicar():
     hist = dict(antes.get("decks_hist") or {})
     if (antes.get("decks") or {}).get("ref"): hist[antes["decks"]["ref"]] = antes["decks"]
     hist[dk["ref"]] = dk
-    upsert("portal_meta", [{"id": 1, "payload": {"meses": PD["meses"], "ano": PD.get("ano"), "pontos_regra": PT, "decks": dk, "decks_hist": hist},
+    upsert("portal_meta", [{"id": 1, "payload": {"meses": PD["meses"], "ano": PD.get("ano"), "pontos_regra": {**PT, "NOTA_GC": PD.get("nota_por_gc") or {}}, "decks": dk, "decks_hist": hist},
                             "publicado_em": time.strftime("%Y-%m-%dT%H:%M:%S%z")}], "id")
     upsert("config", [{"chave": "pendente", "valor": False}, {"chave": "carga_pendente", "valor": False}], "chave")
     print("Portal atualizado.")
