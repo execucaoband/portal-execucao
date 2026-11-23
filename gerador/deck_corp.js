@@ -374,13 +374,14 @@ soviSlide(novo("SOVI pilares foco"), D.sovi || [], "GERÊNCIA " + GC);   // insi
   const meses = [...new Set([...M.map(r => r.mes), ...D.cpi.map(c => c.mes)])].sort();
   const rows = meses.map(m => {
     const r = M.find(x => x.mes === m) || {}, c = D.cpi.find(x => x.mes === m), t = D.tom.find(x => x.lbl === MESES[+m.slice(5, 7)]);
-    return { m, ice: r.ICE, p: pontuacao(m, r.ICE, c, t, COMPR) };
+    return { m, ice: r.PONT ?? r.ICE, p: pontuacao(m, r.PONT ?? r.ICE, c, t, COMPR) };
   });
   const tot = rows.reduce((a, r) => a + r.p.total, 0);
   // ---- tabela (esquerda)
   const TW = CW, x0 = X0, y0 = Y_STRIP, hH = 0.46, hT = 0.5;
   const rh = Math.min(0.46, (Y_END - 0.35 - y0 - hH - hT) / rows.length);
-  const col = [["MÊS", 2.4, "l"], ["ICE", 2.05], ["CPI", 2.05], ["TOM", 2.05], ["COMPROMISSO", 2.05], ["TOTAL", TW - 10.6]];
+  const NP = D.nota_pont || "ICE";   // GC sem pesquisa de ICE pontua pelo RED
+  const col = [["MÊS", 2.4, "l"], [NP, 2.05], ["CPI", 2.05], ["TOM", 2.05], ["COMPROMISSO", 2.05], ["TOTAL", TW - 10.6]];
   let cx = x0; const X = col.map(c => { const r = { x: cx, w: c[1] }; cx += c[1]; return r; });
   // cabeçalho vermelho com cantos arredondados
   s.addShape(pres.ShapeType.roundRect, { x: x0, y: y0, w: TW, h: hH + 0.1, fill: { color: C.red }, line: { color: C.red }, rectRadius: 0.08 });
@@ -409,7 +410,8 @@ soviSlide(novo("SOVI pilares foco"), D.sovi || [], "GERÊNCIA " + GC);   // insi
   s.addText(`TOTAL ACUMULADO ${MES_ATUAL.slice(0, 4)}`, { x: x0 + 0.2, y: yT, w: 5, h: hT, fontFace: FB, fontSize: 11, bold: true, color: C.white, valign: "middle", margin: 0, charSpacing: 1 });
   s.addText(`${tot.toLocaleString("pt-BR")} pts`, { x: X[5].x - 1, y: yT, w: X[5].w + 1 - 0.3, h: hT, fontFace: FB, fontSize: 14, bold: true, color: C.white, align: "right", valign: "middle", margin: 0 });
 
-  s.addText(`Critérios: ICE = ICE Latam ≥ ${PONTOS.ICE_MIN} (5 mil)  ·  CPI = real ≥ meta (3 mil)  ·  TOM executado (2 mil)  ·  COMPROMISSO = ICE ≥ compromisso da GC (1 mil, a partir de julho)`,
+  s.addText(NP === "ICE" ? `Critérios: ICE = ICE Latam ≥ ${PONTOS.ICE_MIN} (5 mil)  ·  CPI = real ≥ meta (3 mil)  ·  TOM executado (2 mil)  ·  COMPROMISSO = ICE ≥ compromisso da GC (1 mil, a partir de julho)`
+    : `Critérios: ${NP} ≥ ${PONTOS.ICE_MIN} (5 mil; ${GC} não tem pesquisa ICE)  ·  CPI = real ≥ meta (3 mil)  ·  TOM executado (2 mil)  ·  COMPROMISSO = ${NP} ≥ compromisso da GC (1 mil, a partir de julho)`,
     { x: X0, y: 6.72, w: CW, h: 0.22, fontFace: F, fontSize: 9, color: C.muted, margin: 0 });
 }
 

@@ -292,16 +292,20 @@ def sovi_insights(x, col_grupo, rot_grupo):
     return out
 
 lbl = lambda m: MESES[int(m[5:7])]
-out = {"meses": meses_pesq, "gcs": {}}
+# nota que vale para a pontuação: ICE Latam; gerência sem pesquisa de ICE usa a nota de dados/config/pontuacao.json (GC. DI → RED)
+_pj = [p for p in (os.path.join(CONFIG, "pontuacao.json"), os.path.join(AQUI, "..", "dados", "config", "pontuacao.json")) if os.path.exists(p)]
+NOTA_PONT = (json.load(open(_pj[0], encoding="utf-8")).get("nota_por_gc") or {}) if _pj else {}
+out = {"meses": meses_pesq, "gcs": {}, "nota_por_gc": NOTA_PONT}
 for g in ger.itertuples():
     gc = g.gc
-    D = {"gc": gc, "nome": g.nome, "compromisso": compromisso.get(gc), "mensal": [], "supervisores": [], "repositor": [], "cpi": [], "tom": []}
+    D = {"gc": gc, "nome": g.nome, "compromisso": compromisso.get(gc), "nota_pont": NOTA_PONT.get(gc, "ICE"), "mensal": [], "supervisores": [], "repositor": [], "cpi": [], "tom": []}
     for m in meses_pesq:
         r = {"mes": m, "lbl": lbl(m)}
         for t in ("RED", "ICE"):
             x = pesq[t][(pesq[t].mes == m) & (pesq[t].gc == gc)]
             r[t] = nota(x, t)
             r[t + "_rep"] = nota_repositor(gc, m, t)
+        r["PONT"] = r.get(D["nota_pont"])          # nota usada na pontuação (ICE, ou RED na GC. DI)
         D["mensal"].append(r)
     # supervisores x mês
     svs = sorted(set(pesq_all["ICE"][pesq_all["ICE"].gc == gc].sv) | set(pesq_all["RED"][pesq_all["RED"].gc == gc].sv))

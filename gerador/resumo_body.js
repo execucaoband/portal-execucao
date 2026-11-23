@@ -51,7 +51,7 @@ const IND = (() => {
   const val = (g, m) => { const G = DATA.gcs[g], r = G.mensal.find(x => x.mes === m) || {}, c = G.cpi.find(x => x.mes === m), sv = (G.sovi || []).find(x => x.mes === m) || {},
       t = G.tom.find(x => x.lbl === MESES[+m.slice(5, 7)]);
     return { ICE: r.ICE, RED: r.RED, RED_rep: r.RED_rep, ICE_rep: r.ICE_rep, CPI: c ? c.real : null, CPI_gap: c ? c.real - c.meta : null, SSD: sv.SSD, SAB: sv.SAB, SUC: sv.SUC,
-      TOM: t ? t.realizou === "SIM" : null, PTS: pontuacao(m, r.ICE, c, t, G.compromisso).total }; };
+      TOM: t ? t.realizou === "SIM" : null, PTS: pontuacao(m, r.PONT ?? r.ICE, c, t, G.compromisso).total }; };
   return { mAnt, val, lista: GCS.filter(g => (DATA.gcs[g].mensal.find(x => x.mes === mA) || {}).ICE != null || (DATA.gcs[g].mensal.find(x => x.mes === mA) || {}).RED != null) };
 })();
 {
@@ -202,7 +202,7 @@ soviSlide(novo("SOVI pilares foco"), MS.filter(m => E(m).sovi_SSD != null).map(m
 {
   const s = novo("Resumo de indicadores");
   const pts = m => GCS.map(g => { const r = DATA.gcs[g].mensal.find(x => x.mes === m) || {}, c = DATA.gcs[g].cpi.find(x => x.mes === m), t = DATA.gcs[g].tom.find(x => x.lbl === MESES[+m.slice(5, 7)]);
-    return pontuacao(m, r.ICE, c, t, DATA.gcs[g].compromisso); });
+    return pontuacao(m, r.PONT ?? r.ICE, c, t, DATA.gcs[g].compromisso); });
   const ok = (v, p) => v == null ? { text: "–", options: { align: "center", color: C.muted } } : { text: v ? "✓" : "✕", options: { align: "center", bold: true, fontSize: 13, color: v ? C.white : C.bad, fill: { color: v ? C.good : C.badBg } } };
   const L = MS.map(m => { const e = E(m), p = pontuacao(m, e.ICE, e.cpi_real != null ? { real: e.cpi_real, meta: e.cpi_meta } : null, e.tom_total ? { realizou: e.tom_sim === e.tom_total ? "SIM" : "NÃO" } : null, null);
     const g = pts(m), med = g.reduce((a, b) => a + b.total, 0) / g.length, max11 = g.filter(x => x.total >= 11000).length, max10 = g.filter(x => x.total >= 10000).length;
@@ -224,7 +224,7 @@ soviSlide(novo("SOVI pilares foco"), MS.filter(m => E(m).sovi_SSD != null).map(m
   const PREMIOS = [7500, 5000, 3000];
   const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
   const ptsGC = (g, m) => { const G = DATA.gcs[g], r = G.mensal.find(x => x.mes === m) || {};
-    return { pts: pontuacao(m, r.ICE, G.cpi.find(x => x.mes === m), G.tom.find(x => x.lbl === MESES[+m.slice(5, 7)]), G.compromisso).total, ice: r.ICE }; };
+    return { pts: pontuacao(m, r.PONT ?? r.ICE, G.cpi.find(x => x.mes === m), G.tom.find(x => x.lbl === MESES[+m.slice(5, 7)]), G.compromisso).total, ice: r.PONT ?? r.ICE }; };
   const pess = (DATA.usuarios || []).filter(u => u.perfil === "gerente" && u.gcs.some(g => DATA.gcs[g]));
   const pp = (u, m) => { const v = u.gcs.filter(g => DATA.gcs[g]).map(g => ptsGC(g, m)).filter(x => x.ice != null); return { pts: avg(v.map(x => x.pts)), ice: avg(v.map(x => x.ice).filter(x => x != null)) }; };
   const ord = (a, b) => b.pts - a.pts || (b.ice ?? -1) - (a.ice ?? -1);

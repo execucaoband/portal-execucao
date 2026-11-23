@@ -198,7 +198,7 @@ def linha_gc(g, mes):
 
 PT = {"ICE_MIN": 75, "ICE": 5000, "CPI": 3000, "TOM": 2000, "PLUS": 1000, "INICIO_PLUS": "2026-07"}
 def pontos(g, mes):
-    G, r, c, t = linha_gc(g, mes); ice = r.get("ICE"); cp = G.get("compromisso")
+    G, r, c, t = linha_gc(g, mes); ice = r.get("PONT", r.get("ICE")); cp = G.get("compromisso")   # GC. DI pontua pelo RED
     ok = {f"ICE ≥ {PT['ICE_MIN']}": ice is not None and ice >= PT["ICE_MIN"], "CPI ≥ meta": bool(c and c["real"] >= c["meta"]), "TOM": bool(t and t["realizou"] == "SIM"),
           "Compromisso": bool(cp is not None and ice is not None and mes >= PT["INICIO_PLUS"] and ice >= cp)}
     return ok, ok[f"ICE ≥ {PT['ICE_MIN']}"] * PT["ICE"] + ok["CPI ≥ meta"] * PT["CPI"] + ok["TOM"] * PT["TOM"] + ok["Compromisso"] * PT["PLUS"]
