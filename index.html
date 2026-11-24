@@ -1318,13 +1318,85 @@ document.addEventListener("keydown",e=>{const o=$("#show");if(!SH||!o||o.classLi
   else if(k==="Escape"){if(SH.painel){SH.painel=null;desenharShow()}else if(!document.fullscreenElement)fecharShow()}});
 
 /* ---------- leitor de .pptx no navegador (slides em imagem = fiel; slides editados = visualização simplificada) ---------- */
+// EMF → PNG (imagens coladas do Excel/Word: bitmaps, textos e formas simples)
+async function emfPng(ab){
+  const dv=new DataView(ab),u8=new Uint8Array(ab),I=o=>dv.getInt32(o,true),U=o=>dv.getUint32(o,true),H=o=>dv.getInt16(o,true),W=o=>dv.getUint16(o,true),F=o=>dv.getFloat32(o,true);
+  if(U(0)!==1||U(40)!==0x464D4520)throw new Error("emf");
+  const bl=I(8),bt=I(12),bw=Math.max(1,I(16)-bl+1),bh=Math.max(1,I(20)-bt+1),S=Math.min(3,Math.max(1,1600/Math.max(bw,bh)));
+  const cv=document.createElement("canvas");cv.width=Math.ceil(bw*S);cv.height=Math.ceil(bh*S);const g=cv.getContext("2d");
+  const rgb=c=>`rgb(${c&255},${c>>8&255},${c>>16&255})`;
+  let st={wo:[0,0],we:[1,1],vo:[0,0],ve:[1,1],mm:1,x:[1,0,0,1,0,0],pen:{c:"#000",w:1,n:false},br:{c:"#fff",n:false},font:{h:12,b:400,i:false,f:"Arial"},tc:"#000",ta:0,bk:"#fff",bkm:1,cur:[0,0]};
+  const pilha=[],obj={},estoque={0x80000000:{t:"br",c:"#fff",n:false},0x80000001:{t:"br",c:"#c0c0c0",n:false},0x80000002:{t:"br",c:"#808080",n:false},0x80000003:{t:"br",c:"#404040",n:false},0x80000004:{t:"br",c:"#000",n:false},0x80000005:{t:"br",n:true},0x80000006:{t:"pen",c:"#fff",w:1,n:false},0x80000007:{t:"pen",c:"#000",w:1,n:false},0x80000008:{t:"pen",n:true}};
+  const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+  const M=()=>{let sx=1,sy=1;if(st.mm===7||st.mm===8){sx=st.ve[0]/(st.we[0]||1);sy=st.ve[1]/(st.we[1]||1);if(st.mm===7){const k=Math.min(Math.abs(sx),Math.abs(sy));sx=Math.sign(sx)*k;sy=Math.sign(sy)*k}}
+    const pag=[sx,0,0,sy,st.vo[0]-st.wo[0]*sx,st.vo[1]-st.wo[1]*sy];return mul([S,0,0,S,-bl*S,-bt*S],mul(pag,st.x))};
+  const pt=(x,y)=>{const m=M();return[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]]};
+  const usar=()=>{const m=M();g.setTransform(m[0],m[1],m[2],m[3],m[4],m[5])};
+  const pintar=(fechado,soLinha)=>{if(fechado&&!soLinha&&!st.br.n){g.fillStyle=st.br.c;g.fill()}if(!st.pen.n){g.strokeStyle=st.pen.c;const m=M();g.lineWidth=Math.max(st.pen.w,1/Math.hypot(m[0],m[1]));g.stroke()}};
+  const pts=(o,n,p16)=>{const a=[];for(let i=0;i<n;i++)a.push(p16?[H(o+4*i),H(o+4*i+2)]:[I(o+8*i),I(o+8*i+4)]);return a};
+  function dib(oB,cbB,oBits,cbBits){if(!cbB)return null;const hs=U(oB),w=I(oB+4),h0=I(oB+8),bpp=W(oB+14),comp=U(oB+16),h=Math.abs(h0),down=h0<0;
+    if(comp===4||comp===5)return{blob:new Blob([u8.slice(oBits,oBits+cbBits)],{type:comp===4?"image/jpeg":"image/png"}),w,h};
+    if(![1,4,8,16,24,32].includes(bpp)||(comp!==0&&comp!==3))return null;
+    let pal=[],nc=U(oB+32)||(bpp<=8?1<<bpp:0),m=[0x7C00,0x3E0,0x1F];if(comp===3){m=hs>=52?[U(oB+40),U(oB+44),U(oB+48)]:[U(oB+hs),U(oB+hs+4),U(oB+hs+8)]}else if(bpp===32)m=[0xFF0000,0xFF00,0xFF];
+    for(let i=0;i<nc&&bpp<=8;i++){const q=oB+hs+4*i;pal.push([u8[q+2],u8[q+1],u8[q]])}
+    const sh=k=>{let s=0;if(!k)return[0,1];while(!(k>>s&1))s++;let n=0;while(k>>(s+n)&1)n++;return[s,(1<<n)-1]},ms=m.map(sh);
+    const id=new ImageData(w,h),d=id.data,str=((w*bpp+31)>>5)*4;
+    for(let y=0;y<h;y++){const ro=oBits+(down?y:h-1-y)*str;for(let x=0;x<w;x++){let r,gg,b;
+      if(bpp===24){const q=ro+3*x;b=u8[q];gg=u8[q+1];r=u8[q+2]}
+      else if(bpp===32&&comp===0){const q=ro+4*x;b=u8[q];gg=u8[q+1];r=u8[q+2]}
+      else if(bpp===16||bpp===32){const v=bpp===16?W(ro+2*x):U(ro+4*x);[r,gg,b]=ms.map(([s,k],j)=>Math.round(((v>>>s)&k)*255/k))}
+      else{const per=8/bpp,byte=u8[ro+Math.floor(x/per)],ix=(byte>>(8-bpp*(x%per+1)))&((1<<bpp)-1);[r,gg,b]=pal[ix]||[0,0,0]}
+      const k=4*(y*w+x);d[k]=r;d[k+1]=gg;d[k+2]=b;d[k+3]=255}}
+    const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").putImageData(id,0,0);return{canvas:c,w,h}}
+  async function blit(x,y,cw,ch,sx,sy,sw,sh,im){if(!im)return;usar();let src=im.canvas;if(im.blob){src=await createImageBitmap(im.blob)}
+    g.imageSmoothingQuality="high";g.drawImage(src,sx,sy,sw||im.w,sh||im.h,x,y,cw,ch)}
+  let o=0,emPath=false;g.lineJoin="round";
+  while(o+8<=ab.byteLength){const t=U(o),sz=U(o+4);if(sz<8||o+sz>ab.byteLength)break;
+    switch(t){
+      case 9:st.we=[I(o+8),I(o+12)];break;case 10:st.wo=[I(o+8),I(o+12)];break;case 11:st.ve=[I(o+8),I(o+12)];break;case 12:st.vo=[I(o+8),I(o+12)];break;
+      case 17:st.mm=U(o+8);break;case 18:st.bkm=U(o+8);break;case 22:st.ta=U(o+8);break;case 24:st.tc=rgb(U(o+8));break;case 25:st.bk=rgb(U(o+8));break;
+      case 35:st.x=[F(o+8),F(o+12),F(o+16),F(o+20),F(o+24),F(o+28)];break;
+      case 36:{const x=[F(o+8),F(o+12),F(o+16),F(o+20),F(o+24),F(o+28)],md=U(o+32);st.x=md===1?[1,0,0,1,0,0]:md===2?mul(st.x,x):md===3?mul(x,st.x):x;break}
+      case 33:pilha.push(JSON.parse(JSON.stringify(st)));g.save();break;
+      case 34:{let n=I(o+8);if(n<0){while(n++<0&&pilha.length){st=pilha.pop();g.restore()}}break}
+      case 37:{const h=U(o+8),ob=h&0x80000000?estoque[h]:obj[h];if(ob){if(ob.t==="pen")st.pen=ob;else if(ob.t==="br")st.br=ob;else if(ob.t==="font")st.font=ob}break}
+      case 40:delete obj[U(o+8)];break;
+      case 38:obj[U(o+8)]={t:"pen",n:(U(o+12)&15)===5,w:I(o+16),c:rgb(U(o+24))};break;
+      case 95:obj[U(o+8)]={t:"pen",n:(U(o+28)&15)===5,w:U(o+32),c:rgb(U(o+40))};break;
+      case 39:obj[U(o+8)]={t:"br",n:U(o+12)===1,c:rgb(U(o+16))};break;
+      case 82:{let f="";for(let i=0;i<32;i++){const c=W(o+12+28+2*i);if(!c)break;f+=String.fromCharCode(c)}obj[U(o+8)]={t:"font",h:Math.abs(I(o+12))||12,b:I(o+12+16),i:!!u8[o+12+20],f:f||"Arial"};break}
+      case 27:st.cur=[I(o+8),I(o+12)];if(emPath)g.moveTo(...st.cur);break;
+      case 54:{const p=[I(o+8),I(o+12)];if(!emPath){usar();g.beginPath();g.moveTo(...st.cur);g.lineTo(...p);pintar(false)}else g.lineTo(...p);st.cur=p;break}
+      case 59:emPath=true;usar();g.beginPath();break;case 60:emPath=false;break;case 61:g.closePath();break;
+      case 62:usar();if(!st.br.n){g.fillStyle=st.br.c;g.fill()}break;case 63:usar();pintar(true);break;case 64:usar();pintar(true,true);break;
+      case 43:case 42:case 44:{const l=I(o+8),tp=I(o+12),r=I(o+16),b=I(o+20);usar();g.beginPath();if(t===42)g.ellipse((l+r)/2,(tp+b)/2,Math.abs(r-l)/2,Math.abs(b-tp)/2,0,0,7);else g.rect(l,tp,r-l,b-tp);pintar(true);break}
+      case 3:case 4:case 86:case 87:case 89:case 6:case 2:case 85:case 88:case 5:{const p16=t>=85,n=U(o+24),a=pts(o+28,n,p16);if(!a.length)break;
+        const bez=t===2||t===85||t===88||t===5,cont=t===89||t===6||t===88||t===5;
+        if(!emPath){usar();g.beginPath()}let i=0;if(cont){if(!emPath)g.moveTo(...st.cur)}else{g.moveTo(...a[0]);i=1}
+        if(bez)for(;i+2<a.length;i+=3)g.bezierCurveTo(...a[i],...a[i+1],...a[i+2]);else for(;i<a.length;i++)g.lineTo(...a[i]);
+        st.cur=a[a.length-1];if(!emPath){if(t===3||t===86)g.closePath();pintar(t===3||t===86)}break}
+      case 8:case 91:case 7:case 90:{const p16=t>=90,np=U(o+24),tot=U(o+28),cnt=[];for(let i=0;i<np;i++)cnt.push(U(o+32+4*i));const a=pts(o+32+4*np,tot,p16);
+        usar();g.beginPath();let k=0;for(const c of cnt){a.slice(k,k+c).forEach((p,i)=>i?g.lineTo(...p):g.moveTo(...p));if(t===8||t===91)g.closePath();k+=c}pintar(t===8||t===91);break}
+      case 81:await blit(I(o+0x18),I(o+0x1C),I(o+0x48),I(o+0x4C),I(o+0x20),I(o+0x24),I(o+0x28),I(o+0x2C),dib(o+U(o+0x30),U(o+0x34),o+U(o+0x38),U(o+0x3C)));break;
+      case 76:case 77:{const x=I(o+0x18),y=I(o+0x1C),cw=I(o+0x20),ch=I(o+0x24),cbB=U(o+0x58);
+        if(!cbB){const rop=U(o+0x28),c=rop===0xF00021?(st.br.n?null:st.br.c):rop===0x42?"#000":rop===0xFF0062?"#fff":null;if(c){usar();g.fillStyle=c;g.fillRect(x,y,cw,ch)}break}
+        await blit(x,y,cw,ch,I(o+0x2C),I(o+0x30),t===77?I(o+0x64):0,t===77?I(o+0x68):0,dib(o+U(o+0x54),cbB,o+U(o+0x5C),U(o+0x60)));break}
+      case 84:{const rx=I(o+0x24),ry=I(o+0x28),n=U(o+0x2C),os=U(o+0x30);let s="";for(let i=0;i<n;i++)s+=String.fromCharCode(W(o+os+2*i));if(!s.trim())break;
+        const m=M(),[px,py]=pt(rx,ry),esc=Math.hypot(m[2],m[3]),ta=st.ta;g.save();g.setTransform(1,0,0,1,0,0);
+        g.font=`${st.font.i?"italic ":""}${st.font.b>=600?"bold ":""}${(st.font.h*esc).toFixed(2)}px '${st.font.f}','Segoe UI',Arial,sans-serif`;
+        g.textAlign=(ta&6)===6?"center":(ta&2)?"right":"left";g.textBaseline=(ta&24)===24?"alphabetic":(ta&8)?"bottom":"top";g.fillStyle=st.tc;g.fillText(s,px,py);g.restore();break}
+      case 14:o=ab.byteLength;continue}
+    o+=sz}
+  return await new Promise(ok=>cv.toBlob(ok,"image/png"))}
 async function lerPptx(blob){
   if(!window.JSZip)throw new Erro("Visualizador indisponível.");
   const z=await JSZip.loadAsync(blob),txt=async p=>{const f=z.file(p);return f?f.async("string"):null},xml=s=>new DOMParser().parseFromString(s,"application/xml");
   const dir=p=>p.slice(0,p.lastIndexOf("/")+1),resolve=(base,t)=>{if(t.startsWith("/"))return t.slice(1);const a=(dir(base)+t).split("/"),o=[];for(const x of a){if(x==="..")o.pop();else if(x!==".")o.push(x)}return o.join("/")};
   const relsCache={},rels=async p=>{if(relsCache[p])return relsCache[p];const r=await txt(dir(p)+"_rels/"+p.slice(p.lastIndexOf("/")+1)+".rels"),m={};
     if(r)for(const e of xml(r).getElementsByTagName("Relationship"))m[e.getAttribute("Id")]={alvo:resolve(p,e.getAttribute("Target")),tipo:e.getAttribute("Type"),ext:e.getAttribute("TargetMode")==="External"};return relsCache[p]=m};
-  const media={},url=async p=>{if(media[p])return media[p];const f=z.file(p);if(!f)return"";const b=await f.async("blob");const ext=p.split(".").pop().toLowerCase();
+  const media={},url=async p=>{if(media[p])return media[p];const f=z.file(p);if(!f)return"";const ext=p.split(".").pop().toLowerCase();
+    if(ext==="emf"){try{return media[p]=URL.createObjectURL(await emfPng(await f.async("arraybuffer")))}catch(e){console.warn("EMF",p,e)}}
+    const b=await f.async("blob");
     return media[p]=URL.createObjectURL(new Blob([b],{type:ext==="svg"?"image/svg+xml":ext==="png"?"image/png":ext==="gif"?"image/gif":"image/jpeg"}))};
   const pres=xml(await txt("ppt/presentation.xml")),sz=pres.getElementsByTagName("p:sldSz")[0],CX=+sz.getAttribute("cx"),CY=+sz.getAttribute("cy");
   const pr=await rels("ppt/presentation.xml"),ids=[...pres.getElementsByTagName("p:sldId")].map(e=>pr[e.getAttribute("r:id")].alvo);
