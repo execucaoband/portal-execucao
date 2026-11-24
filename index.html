@@ -1355,12 +1355,22 @@ async function lerPptx(blob){
     for(let k=0;k<cam.length;k++){const c=cam[k],r=await rels(c.p),t=neto(c.x.documentElement,"p:cSld","p:spTree");if(t)h+=await arvore(t,r,cam,k<cam.length-1,{ox:0,oy:0,sx:1,sy:1})}
     return h+"</div>"}
   async function arvore(t,r,cam,ehBase,T){let h="";for(const el of t.children)h+=await forma(el,r,cam,ehBase,T);return h}
-  const box=(xf,T)=>{const o=filho(xf,"a:off"),e=filho(xf,"a:ext");if(!o||!e)return null;return{x:T.ox+(+o.getAttribute("x"))*T.sx,y:T.oy+(+o.getAttribute("y"))*T.sy,w:(+e.getAttribute("cx"))*T.sx,h:(+e.getAttribute("cy"))*T.sy,rot:+(xf.getAttribute("rot")||0)/6e4,fh:xf.getAttribute("flipH")==="1",fv:xf.getAttribute("flipV")==="1"}};
-  const pos=b=>`left:${pct(b.x,CX)};top:${pct(b.y,CY)};width:${pct(b.w,CX)};height:${pct(b.h,CY)};${b.rot?`transform:rotate(${b.rot}deg);`:""}`;
+  const box=(xf,T,cru)=>{const o=filho(xf,"a:off"),e=filho(xf,"a:ext");if(!o||!e)return null;
+    const b={x:T.ox+(+o.getAttribute("x"))*T.sx,y:T.oy+(+o.getAttribute("y"))*T.sy,w:(+e.getAttribute("cx"))*T.sx,h:(+e.getAttribute("cy"))*T.sy,rot:+(xf.getAttribute("rot")||0)/6e4,fh:xf.getAttribute("flipH")==="1",fv:xf.getAttribute("flipV")==="1"};
+    if(cru||!T.ops)return b;
+    // grupos virados/girados: espelha e gira o centro de cada item em volta do centro do grupo (do grupo mais interno para o mais externo)
+    let cx=b.x+b.w/2,cy=b.y+b.h/2;for(const g of T.ops){if(g.fh){cx=2*g.cx-cx;b.fh=!b.fh;b.rot=-b.rot}if(g.fv){cy=2*g.cy-cy;b.fv=!b.fv;b.rot=-b.rot}
+      if(g.rot){const a=g.rot*Math.PI/180,dx=cx-g.cx,dy=cy-g.cy;cx=g.cx+dx*Math.cos(a)-dy*Math.sin(a);cy=g.cy+dx*Math.sin(a)+dy*Math.cos(a);b.rot+=g.rot}}
+    b.x=cx-b.w/2;b.y=cy-b.h/2;return b};
+  const pos=(b,img)=>{   // PowerPoint: imagem espelha com flipH/flipV; texto não espelha, mas flipV gira o texto 180° (rot 180 + flipV = texto em pé)
+    const r=img?b.rot:((b.rot+(b.fv?180:0))%360+360)%360,esc_=img&&(b.fh||b.fv)?` scale(${b.fh?-1:1},${b.fv?-1:1})`:"";
+    return `left:${pct(b.x,CX)};top:${pct(b.y,CY)};width:${pct(b.w,CX)};height:${pct(b.h,CY)};${r||esc_?`transform:${r?`rotate(${r}deg)`:""}${esc_};`:""}`};
   async function forma(el,r,cam,ehBase,T){
     const n=el.nodeName;
-    if(n==="p:grpSp"){const xf=neto(el,"p:grpSpPr","a:xfrm");if(!xf)return arvore(el,r,cam,ehBase,T);const b=box(xf,T),co=filho(xf,"a:chOff"),ce=filho(xf,"a:chExt");
-      const sx=b.w/(+ce.getAttribute("cx")||1),sy=b.h/(+ce.getAttribute("cy")||1);let h="";for(const c of el.children)h+=await forma(c,r,cam,ehBase,{ox:b.x-(+co.getAttribute("x"))*sx,oy:b.y-(+co.getAttribute("y"))*sy,sx,sy});return h}
+    if(n==="p:grpSp"){const xf=neto(el,"p:grpSpPr","a:xfrm");if(!xf)return arvore(el,r,cam,ehBase,T);const b=box(xf,T,true),co=filho(xf,"a:chOff"),ce=filho(xf,"a:chExt");
+      const sx=b.w/(+ce.getAttribute("cx")||1),sy=b.h/(+ce.getAttribute("cy")||1);
+      const op=(b.fh||b.fv||b.rot)?[{cx:b.x+b.w/2,cy:b.y+b.h/2,fh:b.fh,fv:b.fv,rot:b.rot}]:[],ops=[...op,...(T.ops||[])];
+      let h="";for(const c of el.children)h+=await forma(c,r,cam,ehBase,{ox:b.x-(+co.getAttribute("x"))*sx,oy:b.y-(+co.getAttribute("y"))*sy,sx,sy,ops:ops.length?ops:null});return h}
     if(n==="p:sp"){const ph=phDe(el);
       if(ehBase&&ph)return"";                                           // placeholder do master/layout só desenha se o slide usar
       let spPr=filho(el,"p:spPr"),xf=filho(spPr,"a:xfrm"),fonte=el;
@@ -1373,7 +1383,7 @@ async function lerPptx(blob){
       const tx=filho(el,"p:txBody");const padrao=ph&&tipoPh(ph.tipo)==="title"?{sz:26,b:true}:{sz:18};
       return `<div class="xs" style="${pos(b)}background:${fill};${borda}${rad}">${tx?texto(tx,padrao,fonte!==el?filho(fonte,"p:txBody"):null):""}</div>`}
     if(n==="p:pic"){const xf=neto(el,"p:spPr","a:xfrm"),bl=neto(el,"p:blipFill","a:blip");if(!xf||!bl)return"";const b=box(xf,T),u=await url(r[bl.getAttribute("r:embed")]?.alvo||"");
-      return `<img class="xs" style="${pos(b)}object-fit:fill" src="${u}" alt="">`}
+      return `<img class="xs" style="${pos(b,true)}object-fit:fill" src="${u}" alt="">`}
     if(n==="p:cxnSp"){const xf=neto(el,"p:spPr","a:xfrm");if(!xf)return"";const b=box(xf,T),ln=neto(el,"p:spPr","a:ln"),c=cor(ln&&filho(ln,"a:solidFill"))||"#999",w=Math.max(1,(+(ln&&ln.getAttribute("w"))||12700)/12700);
       const x1=b.fh?b.w:0,y1=b.fv?b.h:0,x2=b.fh?0:b.w,y2=b.fv?0:b.h;
       return `<svg class="xs" style="${pos({...b,w:Math.max(b.w,1),h:Math.max(b.h,1)})}overflow:visible" viewBox="0 0 ${Math.max(b.w,1)} ${Math.max(b.h,1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" vector-effect="non-scaling-stroke" style="stroke-width:${w}px"/></svg>`}
