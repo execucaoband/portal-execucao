@@ -160,6 +160,14 @@ input.txt{border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:1
 .xp{position:absolute;inset:0}.xs{position:absolute;box-sizing:border-box;margin:0}
 .xt{display:flex;flex-direction:column;height:100%;box-sizing:border-box;line-height:1.18;overflow:visible}.xt p{margin:0;white-space:pre-wrap;overflow-wrap:break-word}
 .xtb{border-collapse:collapse;table-layout:fixed}.xtb td{border:1px solid #d9d9d9;padding:.3cqw .5cqw;vertical-align:middle}
+.xv{display:block;overflow:hidden}.xv span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.65);color:#fff;border-radius:99px;padding:.6cqw 1.4cqw;font-size:1.3cqw;white-space:nowrap}
+@keyframes pzFade{from{opacity:0}}@keyframes pzFadeOut{to{opacity:0}}@keyframes pzApp{from{opacity:0}to{opacity:1}}
+@keyframes pzZoom{from{opacity:0;scale:.3}}@keyframes pzZoomOut{to{opacity:0;scale:.3}}@keyframes pzPulse{50%{scale:1.12}}
+@keyframes pzFlyB{from{translate:0 110vh}}@keyframes pzFlyT{from{translate:0 -110vh}}@keyframes pzFlyL{from{translate:-110vw 0}}@keyframes pzFlyR{from{translate:110vw 0}}
+@keyframes pzFlyBOut{to{translate:0 110vh}}@keyframes pzFlyTOut{to{translate:0 -110vh}}@keyframes pzFlyLOut{to{translate:-110vw 0}}@keyframes pzFlyROut{to{translate:110vw 0}}
+@keyframes pzWipeL{from{clip-path:inset(0 100% 0 0)}}@keyframes pzWipeR{from{clip-path:inset(0 0 0 100%)}}@keyframes pzWipeT{from{clip-path:inset(0 0 100% 0)}}@keyframes pzWipeB{from{clip-path:inset(100% 0 0 0)}}
+@keyframes pzPushL{from{translate:100% 0}}@keyframes pzPushR{from{translate:-100% 0}}@keyframes pzPushU{from{translate:0 100%}}@keyframes pzPushD{from{translate:0 -100%}}
+@keyframes pzTrZoom{from{opacity:0;scale:.6}}
 .xg{display:grid;place-items:center;background:#f4f4f4;border:1px dashed #bbb;color:#777;font-size:1.1cqw}
 
 /* cargas */
@@ -426,9 +434,16 @@ const BS = {
     return D;
   },
   async arquivo(caminho) {
-    const { data, error } = await SB.storage.from(CONFIG.BUCKET).download(caminho);
-    if (error) throw new Erro("Sem acesso a esta apresentação.");   // RLS do Storage bloqueia quem não tem permissão
-    return data;
+    const st = SB.storage.from(CONFIG.BUCKET), { data, error } = await st.download(caminho);
+    if (!error) return data;
+    // apresentações acima de 45 MB (com vídeo) ficam em partes: <caminho>.part001, .part002…
+    const pasta = caminho.slice(0, caminho.lastIndexOf("/")), nome = caminho.slice(caminho.lastIndexOf("/") + 1);
+    const { data: L } = await st.list(pasta, { limit: 1000 });
+    const partes = (L || []).map(o => o.name).filter(n => n.startsWith(nome + ".part")).sort();
+    if (!partes.length) throw new Erro("Sem acesso a esta apresentação.");   // RLS do Storage bloqueia quem não tem permissão
+    const bl = [];
+    for (const n of partes) { const r = await st.download(pasta + "/" + n); if (r.error) throw new Erro("Sem acesso a esta apresentação."); bl.push(r.data); }
+    return new Blob(bl, { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
   },
   async registrar(acao, detalhe = "") { try { await SB.from("auditoria").insert({ acao, detalhe: String(detalhe).slice(0, 500) }); } catch (_) {} },
   // ---------- administração (RLS: só perfil admin consegue gravar) ----------
@@ -498,8 +513,22 @@ const BS = {
   },
   async enviarFinal(gc, arq, ref, R) {
     const v = (R.envios[gc] || []).length + 1, caminho = caminhoFinal(gc, ref, v);
-    const up = await SB.storage.from(CONFIG.BUCKET).upload(caminho, arq, { contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", upsert: false });
-    if (up.error) throw new Erro("Envio recusado: o prazo está encerrado ou você não tem permissão para esta gerência.");
+    const P = 45 * 1024 * 1024, st = SB.storage.from(CONFIG.BUCKET);
+    if (arq.size <= P) {
+      const up = await st.upload(caminho, arq, { contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", upsert: false });
+      if (up.error) throw new Erro("Envio recusado: o prazo está encerrado ou você não tem permissão para esta gerência.");
+    } else {                                              // limite do Supabase gratuito: 50 MB por arquivo → partes de 45 MB
+      const n = Math.ceil(arq.size / P);
+      for (let i = 0; i < n; i++) {
+        R.prog && R.prog(i, n);
+        let erro;
+        for (let t = 0; t < 3; t++) {
+          ({ error: erro } = await st.upload(`${caminho}.part${String(i + 1).padStart(3, "0")}`, arq.slice(i * P, Math.min(arq.size, (i + 1) * P)), { upsert: false, contentType: "application/octet-stream" }));
+          if (!erro || /exist|duplicate/i.test(erro.message || "")) { erro = null; break; }
+        }
+        if (erro) throw new Erro(i ? `Falhou a parte ${i + 1} de ${n}. Tente enviar de novo.` : "Envio recusado: o prazo está encerrado ou você não tem permissão para esta gerência.");
+      }
+    }
     const r = await SB.from("envios").insert({ gc, ref, versao: v, caminho, nome: arq.name, enviado_por: U.id, enviado_por_nome: U.nome });
     if (r.error) throw new Erro("Envio recusado: " + r.error.message);
     this.registrar("enviou apresentação final", `${gc} · v${v} · ${arq.name}`);
@@ -1212,7 +1241,7 @@ async function minha(){
     <div class="st done"><div class="n">✓</div><h4>2. Edite no PowerPoint</h4><p>Preencha os <b>planos de ação</b> e inclua slides se quiser. Os slides de indicadores vêm travados (imagem).</p></div>
     <div class="st ${enviou?"done":""}"><div class="n">${enviou?"✓":"3"}</div><h4>3. Envie a versão final</h4><p>Pode reenviar quantas vezes quiser até o prazo; vale a última.</p>
       ${algumAberto?`${gs.length>1?`<select id="upGc" class="selmes" style="margin-bottom:8px">${gs.filter(g=>prazoAberto(RE,g)).map(g=>`<option>${g}</option>`).join("")}</select>`:""}
-      <label class="drop" id="dropZ"><input type="file" accept=".pptx" hidden onchange="enviarArq(this.files[0],$('#upGc')?$('#upGc').value:'${gs[0]}');this.value=''">⬆ Arraste o .pptx aqui ou <b>clique para escolher</b></label>`
+      <label class="drop" id="dropZ"><input type="file" accept=".pptx" hidden onchange="enviarArq(this.files[0],$('#upGc')?$('#upGc').value:'${gs[0]}');this.value=''">⬆ Arraste o .pptx aqui ou <b>clique para escolher</b><small style="display:block;margin-top:4px" class="muted">pode ter gráficos editáveis, vídeos, transições e animações · até 150 MB</small></label>`
       :`<div class="drop off">🔒 Envio bloqueado fora do prazo</div>`}</div></div>`;
   const linhas=gs.map(g=>{const v=ultimaVersao(RE,g),ab=prazoAberto(RE,g),id="up_"+g.replace(/\W/g,"");
     return `<tr><td class="l"><b>${g}</b></td><td class="l"><a class="lnk" onclick="baixar('gc','${g}')">⬇ ${esc(nomeArq(D.apresentacoes.arquivos.gcs[g]))}</a></td>
@@ -1228,9 +1257,10 @@ async function minha(){
 async function enviarArq(f,gc){
   if(!f)return;
   if(!/\.pptx$/i.test(f.name))return toast("Envie o arquivo do PowerPoint (.pptx).",1);
-  if(f.size>50*1024*1024)return toast("Arquivo acima de 50 MB. Reduza as imagens e tente de novo.",1);
+  if(f.size>150*1024*1024)return toast("Arquivo acima de 150 MB. Comprima os vídeos (PowerPoint → Arquivo → Informações → Compactar Mídia) e tente de novo.",1);
   if(!prazoAberto(RE,gc))return toast("O prazo de envio da "+gc+" está encerrado.",1);
-  try{toast("Enviando "+f.name+"…");await B.enviarFinal(gc,f,REF_ATUAL(),RE);toast("Apresentação da "+gc+" enviada.");CACHE_SH={};minha()}catch(e){toast(e.message,1)}
+  const mb=(f.size/1048576).toFixed(0);
+  try{toast("Enviando "+f.name+(f.size>45*1048576?` (${mb} MB, em partes · não feche a página)…`:"…"));await B.enviarFinal(gc,f,REF_ATUAL(),Object.assign(Object.create(RE),{envios:RE.envios,prog:(a,b)=>toast(`Enviando ${f.name}: parte ${a+1} de ${b}… não feche a página`)}));toast("Apresentação da "+gc+" enviada.");CACHE_SH={};minha()}catch(e){toast(e.message,1)}
 }
 async function baixarFinal(gc){try{const v=ultimaVersao(RE,gc);if(!v)return baixar("gc",gc);toast("Preparando o download…");salvarBlob(await B.arquivo(v.caminho),`${nomeArq(D.apresentacoes.arquivos.gcs[gc]).replace(/\.pptx$/,"")}_final_v${v.versao}.pptx`)}catch(e){toast(e.message,1)}}
 
@@ -1304,13 +1334,52 @@ function desenharShow(carregando){
   if(S.painel==="ger")h+=`<div class="pz-ui pz-ger"><h5>${varias?"ORDEM DA REUNIÃO":"PRÉVIA"}</h5>${S.lista.map((g,i)=>{const u=ultimaVersao(RE,g);return `<div class="${g===S.gc?"on":""}" onclick="SH.painel=null;mostrarGc('${g}')"><span>${varias?i+1+" · ":""}${g} <small>${esc((D.gcs[g]||{}).nome||"")}</small></span><i>${u?"final v"+u.versao:"base"}</i></div>`}).join("")}</div>`;
   if(S.painel==="sld"&&slides)h+=`<div class="pz-ui pz-sld">${slides.map((x,i)=>`<div class="sld mini ${i===S.i?"on":""}" style="--ar:${x.ar}" onclick="SH.i=${i};SH.painel=null;desenharShow()">${x.html}<b>${i+1}</b></div>`).join("")}</div>`;
   o.innerHTML=h;SH.erro=null;
+  if(!carregando&&!S.erro)efeitosShow(o,slides);
   const t=o.querySelector(".pz-sld .on");if(t)t.scrollIntoView({block:"nearest",inline:"center"});
 }
+
+/* ---------- efeitos do PowerPoint no modo Apresentar: animações a cada clique e transição entre slides ---------- */
+function efeitoCss(f,saida){
+  const d={1:"T",2:"R",4:"B",8:"L"}[f.sub]||(f.id===2?"B":"B");
+  let k=f.cl==="emph"?"pzPulse":f.id===1?"pzApp":f.id===2||f.id===26?"pzFly"+d:[3,12,16,22].includes(f.id)?"pzWipe"+({T:"T",B:"B",L:"L",R:"R"}[d]):[21,23,31,53].includes(f.id)?"pzZoom":"pzFade";
+  if(saida)k=k.startsWith("pzFly")?k+"Out":k==="pzZoom"?"pzZoomOut":"pzFadeOut";
+  return `${k} ${k==="pzApp"?1:f.dur}ms ease-out ${f.dl}ms both`}
+function prepAnim(sl,sd,passo){
+  const P=(sd&&sd.anim)||[],vis={};
+  for(const p of P)for(const f of p.ef)if(!(f.sid in vis))vis[f.sid]=f.cl!=="entr";
+  P.slice(0,passo).forEach(p=>p.ef.forEach(f=>{if(f.cl==="entr")vis[f.sid]=true;else if(f.cl==="exit")vis[f.sid]=false}));
+  for(const id in vis)sl.querySelectorAll(`[data-sid="${id}"]`).forEach(e=>{e.style.animation="";e.style.visibility=vis[id]?"":"hidden"})}
+function rodarPasso(sl,p){let fim=0;
+  for(const f of p.ef){fim=Math.max(fim,f.dl+f.dur);sl.querySelectorAll(`[data-sid="${f.sid}"]`).forEach(e=>{
+    e.style.animation="none";void e.offsetWidth;
+    if(f.cl==="entr"){e.style.visibility="";e.style.animation=efeitoCss(f)}
+    else if(f.cl==="exit"){e.style.animation=efeitoCss(f,true).replace(" both"," forwards");setTimeout(()=>{e.style.visibility="hidden"},f.dl+f.dur)}
+    else if(f.cl==="emph")e.style.animation=efeitoCss(f)})}
+  return fim}
+function rodarTransicao(sl,t){if(!t||!t.tipo)return;
+  const dir=(t.dir||"").toLowerCase(),m={fade:"pzFade",dissolve:"pzFade",zoom:"pzTrZoom",newsflash:"pzTrZoom",
+    push:"pzPush"+({l:"L",r:"R",u:"U",d:"D"}[dir]||"L"),cover:"pzPush"+({l:"L",r:"R",u:"U",d:"D"}[dir]||"L"),pull:"pzFade",
+    wipe:"pzWipe"+({l:"R",r:"L",u:"B",d:"T"}[dir]||"R"),split:"pzFade",cut:null}[t.tipo];
+  const k=m===undefined?"pzFade":m;if(k)sl.style.animation=`${k} ${t.dur}ms ease-out both`}
+let SH_ADV=null;
+function efeitosShow(o,slides){
+  clearTimeout(SH_ADV);const S=SH,sl=o.querySelector(".sh-st .sld");if(!sl||!slides)return;const sd=slides[S.i],P=sd.anim||[],key=S.gc+"|"+S.i,novo=S.k!==key;
+  if(novo){S.k=key;S.passo=S.volta?P.length:0}
+  prepAnim(sl,sd,S.passo);
+  if(novo&&!S.volta){rodarTransicao(sl,sd.tr);let t=sd.tr&&sd.tr.tipo?sd.tr.dur:0;
+    while(S.passo<P.length&&P[S.passo].auto){const p=P[S.passo];setTimeout(()=>{if(SH&&SH.k===key)rodarPasso(sl,p)},t);t+=Math.max(...p.ef.map(f=>f.dl+f.dur));S.passo++}
+    if(sd.tr&&sd.tr.adv!=null&&!S.painel)SH_ADV=setTimeout(()=>{if(SH&&SH.k===key&&!SH.painel)irSlide(1)},t+sd.tr.adv)}
+  S.volta=false}
 function irSlide(d){if(!SH||!CACHE_SH[SH.gc])return;const n=CACHE_SH[SH.gc].slides.length,i=SH.i+d,idx=SH.lista.indexOf(SH.gc);
+  const sd=CACHE_SH[SH.gc].slides[SH.i],P=(sd&&sd.anim)||[],sl=$("#show .sh-st .sld");
+  if(d>0&&sl&&SH.k===SH.gc+"|"+SH.i&&SH.passo<P.length){clearTimeout(SH_ADV);let t=rodarPasso(sl,P[SH.passo++]);
+    while(SH.passo<P.length&&P[SH.passo].auto){const p=P[SH.passo++];setTimeout(()=>rodarPasso(sl,p),t);t+=Math.max(...p.ef.map(f=>f.dl+f.dur))}return}
+  if(d<0&&SH.k===SH.gc+"|"+SH.i&&SH.passo>0){SH.passo--;prepAnim(sl,sd,SH.passo);return}
+  SH.volta=d<0;
   if(i>=0&&i<n){SH.i=i;desenharShow()}else if(i>=n&&idx<SH.lista.length-1)mostrarGc(SH.lista[idx+1]);else if(i<0&&idx>0)mostrarGc(SH.lista[idx-1],true)}
 document.addEventListener("fullscreenchange",()=>{const o=$("#show");if(!document.fullscreenElement&&SH&&o&&!o.classList.contains("hide")&&SH.fs)fecharShow();if(document.fullscreenElement&&SH)SH.fs=true});   // Esc sai da apresentação, como no PowerPoint
 function telaCheia(){const o=$("#show");if(document.fullscreenElement)document.exitFullscreen();else if(o.requestFullscreen)o.requestFullscreen().catch(()=>toast("Tela cheia indisponível neste navegador.",1))}
-document.addEventListener("keydown",e=>{const o=$("#show");if(!SH||!o||o.classList.contains("hide"))return;const idx=SH.lista.indexOf(SH.gc),k=e.key;
+document.addEventListener("keydown",e=>{const o=$("#show");if(!SH||!o||o.classList.contains("hide"))return;if(e.target&&/^(VIDEO|AUDIO)$/.test(e.target.tagName)&&e.key===" ")return;const idx=SH.lista.indexOf(SH.gc),k=e.key;
   if(["ArrowRight","ArrowDown"," ","Enter"].includes(k)){e.preventDefault();irSlide(1)}else if(["ArrowLeft","ArrowUp","Backspace"].includes(k)){e.preventDefault();irSlide(-1)}
   else if(k==="PageDown"){e.preventDefault();if(idx<SH.lista.length-1)mostrarGc(SH.lista[idx+1])}else if(k==="PageUp"){e.preventDefault();if(idx>0)mostrarGc(SH.lista[idx-1])}
   else if(k==="Home"&&CACHE_SH[SH.gc]){SH.i=0;desenharShow()}else if(k==="End"&&CACHE_SH[SH.gc]){SH.i=CACHE_SH[SH.gc].slides.length-1;desenharShow()}
@@ -1393,11 +1462,11 @@ async function lerPptx(blob){
   const z=await JSZip.loadAsync(blob),txt=async p=>{const f=z.file(p);return f?f.async("string"):null},xml=s=>new DOMParser().parseFromString(s,"application/xml");
   const dir=p=>p.slice(0,p.lastIndexOf("/")+1),resolve=(base,t)=>{if(t.startsWith("/"))return t.slice(1);const a=(dir(base)+t).split("/"),o=[];for(const x of a){if(x==="..")o.pop();else if(x!==".")o.push(x)}return o.join("/")};
   const relsCache={},rels=async p=>{if(relsCache[p])return relsCache[p];const r=await txt(dir(p)+"_rels/"+p.slice(p.lastIndexOf("/")+1)+".rels"),m={};
-    if(r)for(const e of xml(r).getElementsByTagName("Relationship"))m[e.getAttribute("Id")]={alvo:resolve(p,e.getAttribute("Target")),tipo:e.getAttribute("Type"),ext:e.getAttribute("TargetMode")==="External"};return relsCache[p]=m};
+    if(r)for(const e of xml(r).getElementsByTagName("Relationship"))m[e.getAttribute("Id")]={url:e.getAttribute("Target"),alvo:resolve(p,e.getAttribute("Target")),tipo:e.getAttribute("Type"),ext:e.getAttribute("TargetMode")==="External"};return relsCache[p]=m};
   const media={},url=async p=>{if(media[p])return media[p];const f=z.file(p);if(!f)return"";const ext=p.split(".").pop().toLowerCase();
     if(ext==="emf"){try{return media[p]=URL.createObjectURL(await emfPng(await f.async("arraybuffer")))}catch(e){console.warn("EMF",p,e)}}
     const b=await f.async("blob");
-    return media[p]=URL.createObjectURL(new Blob([b],{type:ext==="svg"?"image/svg+xml":ext==="png"?"image/png":ext==="gif"?"image/gif":"image/jpeg"}))};
+    return media[p]=URL.createObjectURL(new Blob([b],{type:{svg:"image/svg+xml",png:"image/png",gif:"image/gif",mp4:"video/mp4",m4v:"video/mp4",mov:"video/quicktime",webm:"video/webm",mp3:"audio/mpeg",m4a:"audio/mp4",wav:"audio/wav"}[ext]||"image/jpeg"}))};
   const pres=xml(await txt("ppt/presentation.xml")),sz=pres.getElementsByTagName("p:sldSz")[0],CX=+sz.getAttribute("cx"),CY=+sz.getAttribute("cy");
   const pr=await rels("ppt/presentation.xml"),ids=[...pres.getElementsByTagName("p:sldId")].map(e=>pr[e.getAttribute("r:id")].alvo);
   // tema: cores e fontes
@@ -1410,6 +1479,96 @@ async function lerPptx(blob){
   const filho=(el,n)=>el?[...el.children].find(c=>c.nodeName===n):null,neto=(el,...ns)=>ns.reduce((e,n)=>filho(e,n),el);
   const pct=(v,t)=>(v/t*100).toFixed(3)+"%",ptq=pt=>(pt*12700/CX*100).toFixed(3)+"cqw";       // pt → % da largura do slide
   const fam=t=>{t=fontes[t]||t;return t?`'${t}','Segoe UI',Selawik,Arial,sans-serif`:"'Segoe UI',Selawik,Arial,sans-serif"};
+  // ---------- gráficos editáveis: desenha a partir dos números guardados no próprio PowerPoint ----------
+  const LN=(el,n)=>el?[...el.getElementsByTagName("*")].filter(e=>e.localName===n):[],L1=(el,n)=>LN(el,n)[0]||null,K=(el,n)=>el?[...el.children].find(e=>e.localName===n)||null:null;
+  const corC=el=>{if(!el)return null;const s=L1(el,"srgbClr"),sc=L1(el,"schemeClr");if(s)return"#"+s.getAttribute("val");if(sc){const k=sc.getAttribute("val");return"#"+(cores[mapa[k]||k]||"4472C4")}return null};
+  const acento=i=>"#"+(cores["accent"+(i%6+1)]||["4472C4","ED7D31","A5A5A5","FFC000","5B9BD5","70AD47"][i%6]);
+  const fmtN=(v,f)=>{if(v==null||isNaN(v))return"";f=f||"General";const pc=/%/.test(f),m=f.match(/\.(0+)/),d=m?m[1].length:(f==="General"?(Math.abs(v)<10&&v%1?2:Math.abs(v)<100&&v%1?1:0):0);
+    return (pc?v*100:v).toLocaleString("pt-BR",{minimumFractionDigits:f==="General"?0:d,maximumFractionDigits:d})+(pc?"%":"")};
+  const escS=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+  async function grafico(cp,b){
+    const s0=await txt(cp);if(!s0)return null;const x=xml(s0),pa=L1(x,"plotArea");if(!pa)return null;
+    const tipos=/^(bar|bar3D|line|line3D|pie|pie3D|doughnut|area|area3D)Chart$/,grupos=[...pa.children].filter(e=>tipos.test(e.localName));if(!grupos.length)return null;
+    const pts=c=>{const o=[];if(!c)return o;for(const p of LN(c,"pt"))o[+p.getAttribute("idx")]=K(p,"v")?.textContent??"";const n=+(K(c,"ptCount")?.getAttribute("val")||o.length);o.length=Math.max(o.length,n);return o};
+    const S=[];let cats=[],fmt0=null;
+    for(const g of grupos){const tipo=g.localName.replace("3D","").replace("Chart",""),dir=K(g,"barDir")?.getAttribute("val")||"col",grp=K(g,"grouping")?.getAttribute("val")||"clustered";
+      const gdl=K(g,"dLbls");
+      for(const se of [...g.children].filter(e=>e.localName==="ser")){
+        const tx=K(se,"tx"),nome=tx?(L1(tx,"v")?.textContent||""):"",cat=K(se,"cat"),val=K(se,"val");
+        const cc=pts(L1(cat,"strCache")||L1(cat,"numCache"));if(cc.length>cats.length)cats=cc;
+        const vc=L1(val,"numCache"),vals=pts(vc).map(v=>v===""||v==null?null:+v),fmt=L1(vc,"formatCode")?.textContent||"General";fmt0??=fmt;
+        const sp=K(se,"spPr"),ln=K(sp,"ln");let c=tipo==="line"?corC(K(ln,"solidFill"))||corC(K(sp,"solidFill")):corC(K(sp,"solidFill"));
+        const idx=+(K(se,"idx")?.getAttribute("val")||S.length),dpt={};for(const d of [...se.children].filter(e=>e.localName==="dPt")){const dc=corC(K(K(d,"spPr"),"solidFill"));if(dc)dpt[+K(d,"idx").getAttribute("val")]=dc}
+        const dl=K(se,"dLbls")||gdl,on=k=>K(dl,k)?.getAttribute("val")==="1",nf=K(dl,"numFmt"),fmtL=nf&&nf.getAttribute("sourceLinked")!=="1"?nf.getAttribute("formatCode"):fmt;
+        S.push({tipo,dir,grp,nome,vals,fmt:fmtL,cor:c||acento(idx),dpt,val:on("showVal"),pct:on("showPercent"),hole:+(K(g,"holeSize")?.getAttribute("val")||(tipo==="doughnut"?50:0))})}}
+    if(!S.length)return null;
+    const tsz=+(L1(K(x.documentElement,"txPr"),"defRPr")?.getAttribute("sz")||1000)/100,W=1000,H=Math.max(200,Math.round(W*b.h/b.w)),fs=Math.min(80,Math.max(9,tsz*12700/b.w*W)),cor0="#595959";
+    let svg="",top=fs*.6,bot=H-fs*.6;
+    // título
+    const tt=K(L1(x,"chart"),"title"),apag=L1(x,"autoTitleDeleted")?.getAttribute("val")==="1";
+    let titulo=tt?LN(tt,"t").map(t=>t.textContent).join(""):"";if((tt||L1(x,"autoTitleDeleted"))&&!titulo&&S.length===1)titulo=S[0].nome;if(!tt&&!L1(x,"autoTitleDeleted")&&S.length===1)titulo=S[0].nome;
+    if(titulo&&!apag){svg+=`<text x="${W/2}" y="${top+fs*1.1}" font-size="${fs*1.3}" text-anchor="middle" fill="#404040">${escS(titulo)}</text>`;top+=fs*1.9}
+    // legenda (embaixo)
+    const pizza=S[0].tipo==="pie"||S[0].tipo==="doughnut",leg=L1(x,"legend");
+    if(leg){const itens=pizza?cats.map((c,i)=>[c,S[0].dpt[i]||acento(i)]):S.map(s=>[s.nome,s.cor]);
+      const larg=itens.map(([t])=>fs*1.6+String(t).length*fs*.55),tot=larg.reduce((a,b)=>a+b,0);let lx=Math.max(fs,(W-tot)/2);const ly=bot-fs*.4;
+      itens.forEach(([t,c],i)=>{svg+=`<rect x="${lx}" y="${ly-fs*.75}" width="${fs*.8}" height="${fs*.8}" fill="${c}"/><text x="${lx+fs*1.1}" y="${ly}" font-size="${fs}" fill="${cor0}">${escS(t)}</text>`;lx+=larg[i]});bot-=fs*1.8}
+    if(pizza){const s=S[0],v=s.vals.map(v=>Math.max(0,v||0)),soma=v.reduce((a,b)=>a+b,0)||1,cx=W/2,cy=(top+bot)/2,R=Math.max(10,Math.min(W*.42,(bot-top)/2*.95)),ri=R*s.hole/100;
+      const ang0=(+(L1(x,"firstSliceAng")?.getAttribute("val")||0)-90)*Math.PI/180;let a=ang0;
+      v.forEach((q,i)=>{if(!q)return;const da=q/soma*2*Math.PI,a2=a+da,big=da>Math.PI?1:0,P=(r,t)=>`${cx+r*Math.cos(t)},${cy+r*Math.sin(t)}`;
+        const d=da>=2*Math.PI-1e-6?`M${P(R,0)}A${R},${R} 0 1 1 ${P(R,Math.PI)}A${R},${R} 0 1 1 ${P(R,0)}Z`:ri?`M${P(R,a)}A${R},${R} 0 ${big} 1 ${P(R,a2)}L${P(ri,a2)}A${ri},${ri} 0 ${big} 0 ${P(ri,a)}Z`:`M${cx},${cy}L${P(R,a)}A${R},${R} 0 ${big} 1 ${P(R,a2)}Z`;
+        svg+=`<path d="${d}" fill="${s.dpt[i]||acento(i)}" stroke="#fff" stroke-width="${fs*.12}"/>`;
+        if(s.val||s.pct){const m=(a+a2)/2,rr=ri?(R+ri)/2:R*.65;svg+=`<text x="${cx+rr*Math.cos(m)}" y="${cy+rr*Math.sin(m)+fs*.35}" font-size="${fs}" text-anchor="middle" fill="#fff" font-weight="700">${s.pct?fmtN(q/soma,"0%"):fmtN(q,s.fmt)}</text>`}
+        a=a2});
+      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;font-family:'Segoe UI',Selawik,Arial,sans-serif">${svg}</svg>`}
+    // eixos: barras/colunas/linhas/áreas no mesmo eixo de valores
+    const horiz=S.some(s=>s.tipo==="bar"&&s.dir==="bar"),nC=Math.max(cats.length,...S.map(s=>s.vals.length)),pctS=S.some(s=>s.grp==="percentStacked"),emp=S.some(s=>/stacked/i.test(s.grp));
+    const somas=[];if(emp)for(let i=0;i<nC;i++){let p=0,n=0;for(const s of S){const v=s.vals[i]||0;v>=0?p+=v:n+=v}somas[i]=[p,n]}
+    const todos=emp?somas.flat():S.flatMap(s=>s.vals.filter(v=>v!=null));let mn=Math.min(0,...todos),mx=Math.max(0,...todos);{const a=Math.min(...todos),z=Math.max(...todos);if(a>0&&z>0&&(z-a)/z<1/6)mn=a-(z-a)/2}if(pctS){mn=0;mx=1}
+    const vax=LN(pa,"valAx")[0],escMin=vax&&L1(vax,"min"),escMax=vax&&L1(vax,"max");if(escMin)mn=+escMin.getAttribute("val");if(escMax)mx=+escMax.getAttribute("val");
+    const passo=(()=>{const r=(mx-mn)||1,p=Math.pow(10,Math.floor(Math.log10(r/5))),k=[1,2,2.5,5,10].find(k=>r/(k*p)<=6)||10;return k*p})();
+    if(!escMax)mx=Math.ceil(mx/passo-1e-9)*passo;if(!escMin)mn=Math.floor(mn/passo+1e-9)*passo;if(mx===mn)mx=mn+passo;
+    const semVal=vax&&K(vax,"delete")?.getAttribute("val")==="1",grade=vax&&K(vax,"majorGridlines"),fmtE=pctS?"0%":(vax&&K(vax,"numFmt")?.getAttribute("formatCode"))||fmt0;
+    const lcat=Math.max(...cats.map(c=>String(c??"").length),1),cfs=fs*.9;
+    const esq=horiz?Math.min(W*.35,lcat*cfs*.55+fs):(semVal?fs*.5:Math.max(...[mn,mx].map(v=>fmtN(v,fmtE).length))*fs*.6+fs*.8),dir_=fs;
+    const base=horiz?bot-(semVal?fs*.4:fs*1.6):bot-fs*1.8,x0=esq,x1=W-dir_,y0=top+fs*.4,y1=base;
+    const V=v=>horiz?x0+(v-mn)/(mx-mn)*(x1-x0):y1-(v-mn)/(mx-mn)*(y1-y0),zero=V(Math.max(mn,Math.min(mx,0)));
+    for(let v=mn;v<=mx+passo*1e-6;v+=passo){const q=V(v);if(grade)svg+=horiz?`<line x1="${q}" y1="${y0}" x2="${q}" y2="${y1}" stroke="#d9d9d9"/>`:`<line x1="${x0}" y1="${q}" x2="${x1}" y2="${q}" stroke="#d9d9d9"/>`;
+      if(!semVal)svg+=horiz?`<text x="${q}" y="${y1+fs*1.2}" font-size="${fs*.85}" text-anchor="middle" fill="${cor0}">${fmtN(v,fmtE)}</text>`:`<text x="${x0-fs*.4}" y="${q+fs*.3}" font-size="${fs*.85}" text-anchor="end" fill="${cor0}">${fmtN(v,fmtE)}</text>`}
+    const faixa=(horiz?y1-y0:x1-x0)/Math.max(nC,1),C=i=>horiz?y1-(i+.5)*faixa:x0+(i+.5)*faixa;   // barras: 1ª categoria embaixo (como no PowerPoint)
+    const cf=Math.min(cfs,horiz?faixa*.8:faixa/Math.max(1,lcat*.55));
+    cats.forEach((c,i)=>{svg+=horiz?`<text x="${x0-fs*.4}" y="${C(i)+cf*.35}" font-size="${cf}" text-anchor="end" fill="${cor0}">${escS(c)}</text>`:`<text x="${C(i)}" y="${y1+cf*1.3}" font-size="${cf}" text-anchor="middle" fill="${cor0}">${escS(c)}</text>`});
+    svg+=horiz?`<line x1="${zero}" y1="${y0}" x2="${zero}" y2="${y1}" stroke="#bfbfbf"/>`:`<line x1="${x0}" y1="${zero}" x2="${x1}" y2="${zero}" stroke="#bfbfbf"/>`;
+    const barras=S.filter(s=>s.tipo==="bar"),nb=emp?1:Math.max(1,barras.length),lb=faixa*(1-(+(L1(pa,"gapWidth")?.getAttribute("val")??150))/100/(1+(+(L1(pa,"gapWidth")?.getAttribute("val")??150))/100)),wb=lb/nb;
+    const acum=[];let rot="";
+    barras.forEach((s,k)=>s.vals.forEach((v,i)=>{if(v==null)return;let a=0,bv=v;if(pctS){const t=somas[i][0]-somas[i][1]||1;bv=v/t}
+      if(emp){acum[i]??=[0,0];const j=bv>=0?0:1;a=acum[i][j];acum[i][j]+=bv}
+      const p1=V(a),p2=V(a+bv),off=emp?-lb/2:-lb/2+k*wb,cor=s.dpt[i]||s.cor;
+      svg+=horiz?`<rect x="${Math.min(p1,p2)}" y="${C(i)+off}" width="${Math.abs(p2-p1)}" height="${wb}" fill="${cor}"/>`:`<rect x="${C(i)+off}" y="${Math.min(p1,p2)}" width="${wb}" height="${Math.abs(p2-p1)}" fill="${cor}"/>`;
+      if(s.val){const t=fmtN(pctS?bv:v,pctS?"0%":s.fmt);rot+=emp?(horiz?`<text x="${(p1+p2)/2}" y="${C(i)+off+wb/2+fs*.35}" font-size="${fs*.85}" text-anchor="middle" fill="#fff">${t}</text>`:`<text x="${C(i)+off+wb/2}" y="${(p1+p2)/2+fs*.35}" font-size="${fs*.85}" text-anchor="middle" fill="#fff">${t}</text>`)
+        :(horiz?`<text x="${p2+(v<0?-1:1)*fs*.3}" y="${C(i)+off+wb/2+fs*.35}" font-size="${fs*.85}" text-anchor="${v<0?"end":"start"}" fill="${cor0}">${t}</text>`:`<text x="${C(i)+off+wb/2}" y="${p2+(v<0?fs*1.1:-fs*.35)}" font-size="${fs*.85}" text-anchor="middle" fill="${cor0}">${t}</text>`)}}));
+    for(const s of S.filter(s=>s.tipo==="line"||s.tipo==="area")){const P=s.vals.map((v,i)=>v==null?null:[C(i),V(v)]).filter(Boolean);if(!P.length)continue;
+      if(s.tipo==="area")svg+=`<path d="M${P[0][0]},${zero}L${P.map(p=>p.join(",")).join("L")}L${P[P.length-1][0]},${zero}Z" fill="${s.cor}" opacity=".85"/>`;
+      else{svg+=`<polyline points="${P.map(p=>p.join(",")).join(" ")}" fill="none" stroke="${s.cor}" stroke-width="${fs*.22}" stroke-linejoin="round"/>`;P.forEach(p=>svg+=`<circle cx="${p[0]}" cy="${p[1]}" r="${fs*.28}" fill="${s.cor}"/>`)}
+      if(s.val)s.vals.forEach((v,i)=>{if(v!=null)rot+=`<text x="${C(i)}" y="${V(v)-fs*.6}" font-size="${fs*.85}" text-anchor="middle" fill="${cor0}">${fmtN(v,s.fmt)}</text>`})}
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;overflow:visible;font-family:'Segoe UI',Selawik,Arial,sans-serif">${svg}${rot}</svg>`}
+  // ---------- animações (sequência de cliques) e transição do slide ----------
+  function efeitos(doc){
+    const ms=[...doc.getElementsByTagName("p:cTn")].find(c=>c.getAttribute("nodeType")==="mainSeq"),lst=ms&&filho(ms,"p:childTnLst");if(!lst)return[];
+    const passos=[];
+    for(const par of [...lst.children].filter(c=>c.nodeName==="p:par")){
+      const efs=[...par.getElementsByTagName("p:cTn")].filter(c=>c.getAttribute("presetClass"));const out=[];
+      for(const c of efs){const sp=c.getElementsByTagName("p:spTgt")[0];if(!sp)continue;
+        let dl=0;for(let e=c;e&&e!==par;e=e.parentNode)if(e.nodeName==="p:cTn"&&e!==filho(par,"p:cTn")){const cd=filho(filho(e,"p:stCondLst"),"p:cond"),d=cd&&+cd.getAttribute("delay");if(d>0)dl+=d}
+        const durs=[...c.getElementsByTagName("p:cTn")].map(x=>+x.getAttribute("dur")).filter(x=>x>0);
+        out.push({sid:sp.getAttribute("spid"),cl:c.getAttribute("presetClass"),id:+c.getAttribute("presetID")||0,sub:+c.getAttribute("presetSubtype")||0,nt:c.getAttribute("nodeType"),dl:Math.min(dl,20000),dur:Math.min(Math.max(0,...durs)||500,5000)})}
+      if(out.length)passos.push({auto:out[0].nt!=="clickEffect",ef:out})}
+    return passos}
+  function transicao(doc){
+    const t=[...doc.getElementsByTagName("*")].find(e=>e.localName==="transition");if(!t)return null;
+    const k=[...t.children].find(e=>e.localName!=="sndAc"&&e.localName!=="extLst"),d=+(t.getAttribute("p14:dur")||0)||({slow:1000,med:750,fast:500}[t.getAttribute("spd")]||700);
+    const adv=t.getAttribute("advTm");return{tipo:k?k.localName:null,dir:k&&k.getAttribute("dir")||"",dur:Math.min(d,3000),adv:adv!=null?+adv:null}}
+  const sid=(el,base)=>{if(base)return"";const c=el.getElementsByTagName("p:cNvPr")[0];return c?` data-sid="${c.getAttribute("id")}"`:""};
   async function partes(slideP){                               // master → layout → slide
     const sr=await rels(slideP),lay=Object.values(sr).find(r=>/slideLayout$/.test(r.tipo)),out=[];
     if(lay){const lr=await rels(lay.alvo),mas=Object.values(lr).find(r=>/slideMaster$/.test(r.tipo));if(mas)out.push({p:mas.alvo,x:xml(await txt(mas.alvo))});out.push({p:lay.alvo,x:xml(await txt(lay.alvo))})}
@@ -1420,7 +1579,7 @@ async function lerPptx(blob){
   async function render(slideP){
     const cam=await partes(slideP),eu=cam[cam.length-1],sr=await rels(slideP);
     const arv=neto(eu.x.documentElement,"p:cSld","p:spTree"),pics=[...arv.children].filter(c=>c.nodeName==="p:pic"),outros=[...arv.children].filter(c=>!["p:nvGrpSpPr","p:grpSpPr","p:pic"].includes(c.nodeName));
-    if(pics.length===1&&!outros.length){const b=neto(pics[0],"p:blipFill","a:blip");if(b){const u=await url(sr[b.getAttribute("r:embed")]?.alvo||"");return `<img src="${u}" alt="">`}}
+    if(pics.length===1&&!outros.length&&!pics[0].getElementsByTagName("a:videoFile").length&&!LN(pics[0],"media").length){const b=neto(pics[0],"p:blipFill","a:blip");if(b){const u=await url(sr[b.getAttribute("r:embed")]?.alvo||"");return `<img src="${u}" alt="">`}}
     // fundo
     let bg="#fff";for(const c of cam){const f=neto(c.x.documentElement,"p:cSld","p:bg","p:bgPr");if(f){const cc=cor(filho(f,"a:solidFill"));if(cc)bg=cc}}
     let h=`<div class="xp" style="background:${bg}">`;
@@ -1442,7 +1601,7 @@ async function lerPptx(blob){
     if(n==="p:grpSp"){const xf=neto(el,"p:grpSpPr","a:xfrm");if(!xf)return arvore(el,r,cam,ehBase,T);const b=box(xf,T,true),co=filho(xf,"a:chOff"),ce=filho(xf,"a:chExt");
       const sx=b.w/(+ce.getAttribute("cx")||1),sy=b.h/(+ce.getAttribute("cy")||1);
       const op=(b.fh||b.fv||b.rot)?[{cx:b.x+b.w/2,cy:b.y+b.h/2,fh:b.fh,fv:b.fv,rot:b.rot}]:[],ops=[...op,...(T.ops||[])];
-      let h="";for(const c of el.children)h+=await forma(c,r,cam,ehBase,{ox:b.x-(+co.getAttribute("x"))*sx,oy:b.y-(+co.getAttribute("y"))*sy,sx,sy,ops:ops.length?ops:null});return h}
+      let h="";for(const c of el.children)h+=await forma(c,r,cam,ehBase,{ox:b.x-(+co.getAttribute("x"))*sx,oy:b.y-(+co.getAttribute("y"))*sy,sx,sy,ops:ops.length?ops:null});return ehBase?h:`<div class="xp"${sid(el,ehBase)}>${h}</div>`}
     if(n==="p:sp"){const ph=phDe(el);
       if(ehBase&&ph)return"";                                           // placeholder do master/layout só desenha se o slide usar
       let spPr=filho(el,"p:spPr"),xf=filho(spPr,"a:xfrm"),fonte=el;
@@ -1453,19 +1612,26 @@ async function lerPptx(blob){
       const ln=filho(spPr,"a:ln");let borda="";if(ln&&!filho(ln,"a:noFill")){const c=cor(filho(ln,"a:solidFill"));if(c)borda=`border:${Math.max(1,(+ln.getAttribute("w")||12700)/12700*0.9).toFixed(1)}px solid ${c};`}
       const rad=geo==="roundRect"?`border-radius:${(Math.min(b.w,b.h)*0.1667/CX*100).toFixed(3)}cqw;`:geo==="ellipse"?"border-radius:50%;":"";
       const tx=filho(el,"p:txBody");const padrao=ph&&tipoPh(ph.tipo)==="title"?{sz:26,b:true}:{sz:18};
-      return `<div class="xs" style="${pos(b)}background:${fill};${borda}${rad}">${tx?texto(tx,padrao,fonte!==el?filho(fonte,"p:txBody"):null):""}</div>`}
+      return `<div class="xs"${sid(el,ehBase)} style="${pos(b)}background:${fill};${borda}${rad}">${tx?texto(tx,padrao,fonte!==el?filho(fonte,"p:txBody"):null):""}</div>`}
     if(n==="p:pic"){const xf=neto(el,"p:spPr","a:xfrm"),bl=neto(el,"p:blipFill","a:blip");if(!xf||!bl)return"";const b=box(xf,T),u=await url(r[bl.getAttribute("r:embed")]?.alvo||"");
-      return `<img class="xs" style="${pos(b,true)}object-fit:fill" src="${u}" alt="">`}
+      const md=LN(el,"media")[0]||el.getElementsByTagName("a:videoFile")[0]||el.getElementsByTagName("a:audioFile")[0],mid=md&&(md.getAttribute("r:embed")||md.getAttribute("r:link")),mr=mid&&r[mid];
+      if(mr){const aud=md.localName==="audioFile"||/\.(mp3|m4a|wav|wma)$/i.test(mr.alvo);
+        if(mr.ext)return `<a class="xs xv"${sid(el,ehBase)} style="${pos(b,true)}" href="${esc(mr.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><img src="${u}" alt="" style="width:100%;height:100%;object-fit:fill"><span>▶ abrir vídeo</span></a>`;
+        const mu=await url(mr.alvo);if(mu)return aud?`<audio class="xs"${sid(el,ehBase)} style="${pos(b)}min-width:12cqw" src="${mu}" controls preload="none" onclick="event.stopPropagation()"></audio>`
+          :`<video class="xs"${sid(el,ehBase)} style="${pos(b,true)}object-fit:contain;background:#000" src="${mu}" poster="${u}" controls playsinline preload="none" onclick="event.stopPropagation()"></video>`}
+      return `<img class="xs"${sid(el,ehBase)} style="${pos(b,true)}object-fit:fill" src="${u}" alt="">`}
     if(n==="p:cxnSp"){const xf=neto(el,"p:spPr","a:xfrm");if(!xf)return"";const b=box(xf,T),ln=neto(el,"p:spPr","a:ln"),c=cor(ln&&filho(ln,"a:solidFill"))||"#999",w=Math.max(1,(+(ln&&ln.getAttribute("w"))||12700)/12700);
       const x1=b.fh?b.w:0,y1=b.fv?b.h:0,x2=b.fh?0:b.w,y2=b.fv?0:b.h;
-      return `<svg class="xs" style="${pos({...b,w:Math.max(b.w,1),h:Math.max(b.h,1)})}overflow:visible" viewBox="0 0 ${Math.max(b.w,1)} ${Math.max(b.h,1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" vector-effect="non-scaling-stroke" style="stroke-width:${w}px"/></svg>`}
+      return `<svg class="xs"${sid(el,ehBase)} style="${pos({...b,w:Math.max(b.w,1),h:Math.max(b.h,1)})}overflow:visible" viewBox="0 0 ${Math.max(b.w,1)} ${Math.max(b.h,1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" vector-effect="non-scaling-stroke" style="stroke-width:${w}px"/></svg>`}
     if(n==="p:graphicFrame"){const xf=filho(el,"p:xfrm");if(!xf)return"";const b=box(xf,T),tbl=el.getElementsByTagName("a:tbl")[0];
       if(tbl){const cols=[...tbl.getElementsByTagName("a:gridCol")].map(g=>+g.getAttribute("w")),tw=cols.reduce((a,c)=>a+c,0)||1;
-        let h=`<table class="xs xtb" style="${pos(b)}"><colgroup>${cols.map(c=>`<col style="width:${(c/tw*100).toFixed(2)}%">`).join("")}</colgroup>`;
+        let h=`<table class="xs xtb"${sid(el,ehBase)} style="${pos(b)}"><colgroup>${cols.map(c=>`<col style="width:${(c/tw*100).toFixed(2)}%">`).join("")}</colgroup>`;
         for(const tr of tbl.getElementsByTagName("a:tr")){h+="<tr>";for(const tc of [...tr.children].filter(c=>c.nodeName==="a:tc")){if(tc.getAttribute("hMerge")==="1"||tc.getAttribute("vMerge")==="1")continue;
           const pr=filho(tc,"a:tcPr"),bg=cor(filho(pr,"a:solidFill"));h+=`<td ${tc.getAttribute("gridSpan")?`colspan="${tc.getAttribute("gridSpan")}"`:""} ${tc.getAttribute("rowSpan")?`rowspan="${tc.getAttribute("rowSpan")}"`:""} style="${bg?"background:"+bg:""}">${texto(filho(tc,"a:txBody"),{sz:12},null,true)}</td>`}h+="</tr>"}
         return h+"</table>"}
-      return `<div class="xs xg" style="${pos(b)}">📊 gráfico editável · baixe a apresentação para ver</div>`}
+      const ch=LN(el,"chart")[0],cid=ch&&(ch.getAttribute("r:id")||ch.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id"));
+      if(ch&&r[cid]){try{const g=await grafico(r[cid].alvo,b);if(g)return `<div class="xs"${sid(el,ehBase)} style="${pos(b)}">${g}</div>`}catch(e){console.warn("gráfico",e)}}
+      return `<div class="xs xg"${sid(el,ehBase)} style="${pos(b)}">📊 este tipo de gráfico só aparece no PowerPoint · baixe a apresentação</div>`}
     return""}
   function texto(tx,padrao,txBase,celula){
     if(!tx)return"";const bp=filho(tx,"a:bodyPr"),an=bp&&bp.getAttribute("anchor")||(padrao.b?"ctr":"t");
@@ -1483,7 +1649,7 @@ async function lerPptx(blob){
       if(!corpo){const e=filho(p,"a:endParaRPr");corpo=`<span style="font-size:${ptq(e&&e.getAttribute("sz")?+e.getAttribute("sz")/100:padrao.sz)}">&nbsp;</span>`}
       h+=`<p style="text-align:${al==="ctr"?"center":al==="r"?"right":al==="just"?"justify":"left"}">${bu?`<span>${esc(bu)}</span>`:""}${corpo}</p>`}
     return h+"</div>"}
-  let NUM=0;const out=[];for(const p of ids){NUM++;try{out.push({html:await render(p),ar:(CX/CY).toFixed(4)})}catch(e){out.push({ar:(CX/CY).toFixed(4),html:`<div class="xp"><div class="xg" style="inset:0;position:absolute">Não foi possível mostrar este slide · baixe a apresentação</div></div>`})}}
+  let NUM=0;const out=[];for(const p of ids){NUM++;try{out.push({html:await render(p),ar:(CX/CY).toFixed(4)});try{const sx=xml(await txt(p));out[out.length-1].anim=efeitos(sx);out[out.length-1].tr=transicao(sx)}catch(_){}}catch(e){out.push({ar:(CX/CY).toFixed(4),html:`<div class="xp"><div class="xg" style="inset:0;position:absolute">Não foi possível mostrar este slide · baixe a apresentação</div></div>`})}}
   return out;
 }
 
