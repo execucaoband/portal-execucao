@@ -81,6 +81,8 @@ jobs:
           if python supabase/publicar_supabase.py precisa; then echo "rodar=1" >> "$GITHUB_OUTPUT"; else echo "rodar=0" >> "$GITHUB_OUTPUT"; fi
           # gerente cadastrado que ainda não recebeu o aviso do mês atual? (não reprocessa nada, só envia o e-mail)
           if python supabase/publicar_supabase.py precisa-aviso; then echo "aviso=1" >> "$GITHUB_OUTPUT"; else echo "aviso=0" >> "$GITHUB_OUTPUT"; fi
+          # mantém só a última versão de cada gerência no mês (libera espaço para vídeos)
+          python supabase/publicar_supabase.py limpar-versoes || echo "::warning::não consegui limpar as versões antigas"
 
   processar:
     needs: verificar
