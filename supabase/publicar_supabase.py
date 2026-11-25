@@ -301,6 +301,25 @@ def limpar_sovi_bruto():
     print(f"{len(apagar)} parte(s) do SOVI bruto apagada(s) do Supabase.")
 
 
+def limpar_versoes():
+    """mantém só a última versão enviada de cada gerência por mês (FINAL/GC_xx/<ref>_vN.pptx e partes .partNNN)
+    · só apaga versões MENORES que a última registrada em envios (um envio em andamento nunca é apagado)"""
+    env = req("GET", "/rest/v1/envios?select=gc,ref,versao") or []
+    ult = {}
+    for e in env:
+        k = (slug(e["gc"]), e["ref"]); ult[k] = max(ult.get(k, 0), int(e["versao"]))
+    pastas = [x["name"] for x in (req("POST", f"/storage/v1/object/list/{BUCKET}", {"prefix": "FINAL/", "limit": 1000}) or []) if not x.get("id")]
+    apagar = []
+    for pg in pastas:
+        for nome in listar(f"FINAL/{pg}"):
+            m = re.match(r"^(.+)_v(\d+)\.pptx(\.part\d{3})?$", nome)
+            if m and int(m.group(2)) < ult.get((pg, m.group(1)), 0):
+                apagar.append(f"FINAL/{pg}/{nome}")
+    for i in range(0, len(apagar), 100):
+        req("DELETE", f"/storage/v1/object/{BUCKET}", {"prefixes": apagar[i:i + 100]})
+    print(f"{len(apagar)} versão(ões) antiga(s) apagada(s) do Supabase.")
+
+
 # ---------------------------------------------------------------- aviso por e-mail aos gerentes
 def _dt_br(v):
     try:
@@ -485,6 +504,7 @@ if __name__ == "__main__":
     elif cmd == "status": gravar_status(sys.argv[2], " ".join(sys.argv[3:]))
     elif cmd == "montar-sovi-bruto": print(f"{montar_sovi_bruto()} SOVI bruto(s) montado(s).")
     elif cmd == "limpar-sovi-bruto": limpar_sovi_bruto()
+    elif cmd == "limpar-versoes": limpar_versoes()
     elif cmd == "avisar": avisar()
     elif cmd == "precisa-aviso": sys.exit(0 if precisa_aviso() else 1)
     elif cmd == "testar-email": testar_email()
