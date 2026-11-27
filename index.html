@@ -1329,7 +1329,7 @@ function desenharShow(carregando){
       <span class="pz-sep"></span><span class="pz-rot">${rot} · <i>${ver}</i></span><span class="pz-sep"></span>
       ${varias?`<button title="Gerências (G)" class="${S.painel==="ger"?"on":""}" onclick="painelShow('ger')">☰ Gerências</button>`:""}
       <button title="Todos os slides (S)" class="${S.painel==="sld"?"on":""}" onclick="painelShow('sld')">▦ Slides</button>
-      ${varias&&idx<S.lista.length-1?`<button title="Próxima gerência (PgDn)" onclick="mostrarGc('${S.lista[idx+1]}')">Próxima gerência ⏭</button>`:""}
+      ${varias&&idx<S.lista.length-1?`<button title="Próxima gerência (N)" onclick="mostrarGc('${S.lista[idx+1]}')">Próxima gerência ⏭</button>`:""}
       <button title="Baixar esta apresentação" onclick="baixarFinal('${S.gc}')">⬇</button><button title="Tela cheia (F)" onclick="telaCheia()">⛶</button><button title="Sair (Esc)" onclick="fecharShow()">✕</button></div>`;
   if(S.painel==="ger")h+=`<div class="pz-ui pz-ger"><h5>${varias?"ORDEM DA REUNIÃO":"PRÉVIA"}</h5>${S.lista.map((g,i)=>{const u=ultimaVersao(RE,g);return `<div class="${g===S.gc?"on":""}" onclick="SH.painel=null;mostrarGc('${g}')"><span>${varias?i+1+" · ":""}${g} <small>${esc((D.gcs[g]||{}).nome||"")}</small></span><i>${u?"final v"+u.versao:"base"}</i></div>`}).join("")}</div>`;
   if(S.painel==="sld"&&slides)h+=`<div class="pz-ui pz-sld">${slides.map((x,i)=>`<div class="sld mini ${i===S.i?"on":""}" style="--ar:${x.ar}" onclick="SH.i=${i};SH.painel=null;desenharShow()">${x.html}<b>${i+1}</b></div>`).join("")}</div>`;
@@ -1380,8 +1380,9 @@ function irSlide(d){if(!SH||!CACHE_SH[SH.gc])return;const n=CACHE_SH[SH.gc].slid
 document.addEventListener("fullscreenchange",()=>{const o=$("#show");if(!document.fullscreenElement&&SH&&o&&!o.classList.contains("hide")&&SH.fs)fecharShow();if(document.fullscreenElement&&SH)SH.fs=true});   // Esc sai da apresentação, como no PowerPoint
 function telaCheia(){const o=$("#show");if(document.fullscreenElement)document.exitFullscreen();else if(o.requestFullscreen)o.requestFullscreen().catch(()=>toast("Tela cheia indisponível neste navegador.",1))}
 document.addEventListener("keydown",e=>{const o=$("#show");if(!SH||!o||o.classList.contains("hide"))return;if(e.target&&/^(VIDEO|AUDIO)$/.test(e.target.tagName)&&e.key===" ")return;const idx=SH.lista.indexOf(SH.gc),k=e.key;
-  if(["ArrowRight","ArrowDown"," ","Enter"].includes(k)){e.preventDefault();irSlide(1)}else if(["ArrowLeft","ArrowUp","Backspace"].includes(k)){e.preventDefault();irSlide(-1)}
-  else if(k==="PageDown"){e.preventDefault();if(idx<SH.lista.length-1)mostrarGc(SH.lista[idx+1])}else if(k==="PageUp"){e.preventDefault();if(idx>0)mostrarGc(SH.lista[idx-1])}
+  // passador de slides envia PageDown/PageUp: avança/volta slide, como no PowerPoint (ao fim dos slides segue para a próxima gerência)
+  if(["ArrowRight","ArrowDown"," ","Enter","PageDown"].includes(k)){e.preventDefault();irSlide(1)}else if(["ArrowLeft","ArrowUp","Backspace","PageUp"].includes(k)){e.preventDefault();irSlide(-1)}
+  else if(k==="n"||k==="N"){e.preventDefault();if(idx<SH.lista.length-1)mostrarGc(SH.lista[idx+1])}else if(k==="p"||k==="P"){e.preventDefault();if(idx>0)mostrarGc(SH.lista[idx-1])}
   else if(k==="Home"&&CACHE_SH[SH.gc]){SH.i=0;desenharShow()}else if(k==="End"&&CACHE_SH[SH.gc]){SH.i=CACHE_SH[SH.gc].slides.length-1;desenharShow()}
   else if(k==="g"||k==="G"){if(SH.lista.length>1)painelShow("ger")}else if(k==="s"||k==="S")painelShow("sld");else if(k==="f"||k==="F")telaCheia();
   else if(k==="Escape"){if(SH.painel){SH.painel=null;desenharShow()}else if(!document.fullscreenElement)fecharShow()}});
